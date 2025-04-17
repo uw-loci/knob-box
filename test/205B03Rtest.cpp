@@ -1,3 +1,4 @@
+#include <arduino-timer.h>
 #include <Wire.h>
 // Adafruit’s unified ADS1X15 library handles both ADS1015 and ADS1115
 #include <Adafruit_ADS1X15.h>
@@ -13,6 +14,9 @@ Adafruit_ADS1115 ads;
 // (Check your LCD’s documentation for its I²C address.)
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
+//Timer for read ADC Value
+auto timer = timer_create_default();
+
 // Channel assignment:
 //   A0 -> Voltage Monitor from Bertan 
 //   A1 -> Pot (voltage program setting)
@@ -21,8 +25,30 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 #define CH_POT       1
 #define CH_IMON      2
 
+//Power supply mode pin define
+#define SET_BERTAN_3KV 48
+#define SET_BERTAN_20KV 50
+#define SET_MATSUSADA_1KV 52
+
+int voltage_multiplier = 0;
+float current_multiplier = 0;
+
 // For convenience, pick an ADS1115 data rate that easily exceeds 2.5 samples/s.
 // For instance, the default (128 SPS) is plenty fast for a 400 ms loop.
+
+//Timer callback
+uint16_t potRaw = 0;
+uint16_t vmonRaw = 0;
+uint16_t imonRaw = 0;
+
+bool read_value(void *) {
+  // Read the four ADS1115 channels in single‐ended mode:
+  potRaw       = ads.readADC_SingleEnded(CH_POT);
+  vmonRaw      = ads.readADC_SingleEnded(CH_VMON);
+  imonRaw      = ads.readADC_SingleEnded(CH_IMON);
+  return true; // repeat? true
+}
+
 void setup()
 {
   Serial.begin(9600);
@@ -40,24 +66,43 @@ void setup()
   //   ads.setGain(GAIN_TWO);    // ±2.048 V
   //   ads.setGain(GAIN_FOUR);   // ±1.024 V
   // etc. The default is GAIN_TWOTHIRDS (±6.144 V), fine for 0–5 V.
+
+  //Init pin for checking
+  pinMode(SET_BERTAN_3KV, INPUT_PULLDOWN);
+  pinMode(SET_BERTAN_20KV, INPUT_PULLDOWN);
+  pinMode(SET_MATSUSADA_1KV, INPUT_PULLDOWN);
   
   // Initialize the LCD
   lcd.init();
   lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Bertan Setup");
+  if(SET_BERTAN_3KV){
+    lcd.print("Bertan 3kV Setup");
+    voltage_multiplier = 3000;
+    current_multiplier = 10.0;
+  }else if(SET_BERTAN_20KV){
+    lcd.print("Bertan 20kV Setup");
+    voltage_multiplier = 20000;
+    current_multiplier = 1.0;
+  }else if(SET_MATSUSADA_1KV){
+    lcd.print("Matsusada");
+    lcd.setCursor(0, 1);
+    lcd.print("1kV Setup");
+    voltage_multiplier = 1000;
+    current_multiplier = 1.0;
+  }else{
+    lcd.print("Error!");
+    while (true){} //Halt everything
+  }
   delay(1000);
   lcd.clear();
+
+  timer.every(200, read_value); //Setup timer callback
 }
 
 void loop()
 {
-  // Read the four ADS1115 channels in single‐ended mode:
-  int16_t potRaw       = ads.readADC_SingleEnded(CH_POT);
-  int16_t vmonRaw      = ads.readADC_SingleEnded(CH_VMON);
-  int16_t imonRaw      = ads.readADC_SingleEnded(CH_IMON);
-
   // Convert from raw ADC reading to voltage at each ADS input pin.
   // By default, the Adafruit library uses ±6.144 V as the full‐scale range,
   // which yields ~0.1875 mV/LSB. If you used setGain(GAIN_ONE) or others,
@@ -77,9 +122,9 @@ void loop()
   // The polarity pin is open-collector; if you’ve got a pull-up to 5 V, reading near 0 means
   // positive polarity, near 5 means negative. You can threshold it to figure out text labels.
 
-  float hvProgram_V = (potVolts / 5.0) * 3000;     // example for 3 kV supply
-  float measuredHV_V = (vmonVolts / 5.0) * 3000;   // for 3 kV supply
-  float measuredI_mA  = (imonVolts / 5.0) * 10.0;  // for 10 mA max rating
+  float hvProgram_V = (potVolts / 5.0) * voltage_multiplier;     // example for 3 kV supply
+  float measuredHV_V = (vmonVolts / 5.0) * voltage_multiplier;   // for 3 kV supply
+  float measuredI_mA  = (imonVolts / 5.0) * current_multiplier;  // for 10 mA max rating
 
   // Print results to Serial
   Serial.print("Set: ");
@@ -92,20 +137,24 @@ void loop()
 
   // Display two readings on each of the two LCD rows
   // Row 1: HV setpoint (kV) and measured HV
+  char buffer[10];
+  sprintf(buffer, "%05d", int(hvProgram_V));
+  String fvar = "Vs:" + String(buffer) + "V ";
+  
   lcd.setCursor(0, 0);
-  lcd.print("Set: ");
-  lcd.print(hvProgram_V, 0);
-  lcd.print(" V");
+  lcd.print(fvar);
+  lcd.setCursor(10, 0);
+  lcd.print("I:");
 
+  char vbuffer[10];
+  sprintf(vbuffer, "%05d", int(measuredHV_V));
+  String secondRow = "V:" + String(vbuffer) + "V ";
+  String current = String(measuredI_mA,1) + "mA     ";
   // Row 2: measured current (mA) and polarity
   lcd.setCursor(0, 1);
-  lcd.print("V:");
-  lcd.print(measuredHV_V, 0);
-  lcd.print("V ");
-  lcd.print("I:");
-  lcd.print(measuredI_mA, 2);
-  lcd.print("mA");
+  lcd.print(secondRow);
+  lcd.setCursor(10, 1);
+  lcd.print(current);
 
-  // Wait ~400 ms between reads
-  delay(250);
+  timer.tick();
 }
