@@ -41,7 +41,7 @@ uint16_t potRaw = 0;
 uint16_t vmonRaw = 0;
 uint16_t imonRaw = 0;
 
-bool read_value(void *) {
+bool read_value(void *) { //Callback to read ADC
   // Read the four ADS1115 channels in single‐ended mode:
   potRaw       = ads.readADC_SingleEnded(CH_POT);
   vmonRaw      = ads.readADC_SingleEnded(CH_VMON);
@@ -77,27 +77,31 @@ void setup()
   lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
-  if(!digitalRead(SET_BERTAN_3KV)){
+  if(!digitalRead(SET_BERTAN_3KV)){         //Pin 48 pull down
     lcd.print("Bertan 3kV Setup");
+    lcd.setCursor(0, 1);
+    lcd.print("20kV Setup");
     voltage_multiplier = 3000;
     current_multiplier = 10.0;
-  }else if(!digitalRead(SET_BERTAN_20KV)){
-    lcd.print("Bertan 20kV Setup");
+  }else if(!digitalRead(SET_BERTAN_20KV)){  //Pin 50 pull down
+    lcd.print("Bertan");
+    lcd.setCursor(0, 1);
+    lcd.print("20kV Setup");
     voltage_multiplier = 20000;
     current_multiplier = 1.0;
-  }else if(!digitalRead(SET_MATSUSADA_1KV)){
+  }else if(!digitalRead(SET_MATSUSADA_1KV)){//Pin 52 pull down
     lcd.print("Matsusada");
     lcd.setCursor(0, 1);
     lcd.print("1kV Setup");
     voltage_multiplier = 1000;
     current_multiplier = 1.0;
-  }else{
+  }else{                                    //Nothing connencted
     lcd.print("Error");
     lcd.setCursor(0,1);
     lcd.print("No mode set!");
     while (true){} //Halt everything
   }
-  delay(1000);
+  delay(1000);  //Wait a little bit for everything ready
   lcd.clear();
 
   timer.every(200, read_value); //Setup timer callback
