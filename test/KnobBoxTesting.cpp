@@ -92,7 +92,9 @@ void setup()
     voltage_multiplier = 1000;
     current_multiplier = 1.0;
   }else{
-    lcd.print("Error, no mode set!");
+    lcd.print("Error");
+    lcd.setCursor(0,1);
+    lcd.print("No mode set!");
     while (true){} //Halt everything
   }
   delay(1000);
