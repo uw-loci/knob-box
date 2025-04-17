@@ -68,31 +68,31 @@ void setup()
   // etc. The default is GAIN_TWOTHIRDS (±6.144 V), fine for 0–5 V.
 
   //Init pin for checking
-  pinMode(SET_BERTAN_3KV, INPUT_PULLDOWN);
-  pinMode(SET_BERTAN_20KV, INPUT_PULLDOWN);
-  pinMode(SET_MATSUSADA_1KV, INPUT_PULLDOWN);
+  pinMode(SET_BERTAN_3KV, INPUT_PULLUP);
+  pinMode(SET_BERTAN_20KV, INPUT_PULLUP);
+  pinMode(SET_MATSUSADA_1KV, INPUT_PULLUP);
   
   // Initialize the LCD
   lcd.init();
   lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
-  if(SET_BERTAN_3KV){
+  if(!digitalRead(SET_BERTAN_3KV)){
     lcd.print("Bertan 3kV Setup");
     voltage_multiplier = 3000;
     current_multiplier = 10.0;
-  }else if(SET_BERTAN_20KV){
+  }else if(!digitalRead(SET_BERTAN_20KV)){
     lcd.print("Bertan 20kV Setup");
     voltage_multiplier = 20000;
     current_multiplier = 1.0;
-  }else if(SET_MATSUSADA_1KV){
+  }else if(!digitalRead(SET_MATSUSADA_1KV)){
     lcd.print("Matsusada");
     lcd.setCursor(0, 1);
     lcd.print("1kV Setup");
     voltage_multiplier = 1000;
     current_multiplier = 1.0;
   }else{
-    lcd.print("Error!");
+    lcd.print("Error, no mode set!");
     while (true){} //Halt everything
   }
   delay(1000);
