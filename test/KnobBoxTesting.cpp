@@ -7,6 +7,9 @@
 // Adjust the include and constructor depending on which I²C LCD library you use.
 #include <LiquidCrystal_I2C.h>
 
+//Watch dog timer
+#include <avr/wdt.h>
+
 // Create the ADS1115 object
 Adafruit_ADS1115 ads;  
 
@@ -15,7 +18,7 @@ Adafruit_ADS1115 ads;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 //Timer for read ADC Value
-Timer<2, millis> timer;
+Timer<3, millis> timer;
 
 // Channel assignment:
 //   A0 -> Voltage Monitor from Bertan 
@@ -41,10 +44,20 @@ int16_t potRaw = 0;
 int16_t vmonRaw = 0;
 int16_t imonRaw = 0;
 
+float potVolts;
+float vmonVolts;
+float imonVolts;
+
 float hvProgram_V;
 float measuredHV_V;
 float measuredI_mA;
 
+float voltsPerCount = 0.1875F / 1000.0F;
+
+bool clear_display(void *){
+  lcd.clear();
+  return true;
+}
 
 bool read_value(void *) { //Callback to read ADC
   // Read the four ADS1115 channels in single‐ended mode:
@@ -56,11 +69,10 @@ bool read_value(void *) { //Callback to read ADC
   // By default, the Adafruit library uses ±6.144 V as the full‐scale range,
   // which yields ~0.1875 mV/LSB. If you used setGain(GAIN_ONE) or others,
   // your conversion factor changes. For the default ±6.144 V:
-  float voltsPerCount = 0.1875F / 1000.0F; // = 0.0001875 V per LSB
 
-  float potVolts      = potRaw      * voltsPerCount; 
-  float vmonVolts     = vmonRaw     * voltsPerCount;
-  float imonVolts     = imonRaw     * voltsPerCount;
+  potVolts      = potRaw      * voltsPerCount; 
+  vmonVolts     = vmonRaw     * voltsPerCount;
+  imonVolts     = imonRaw     * voltsPerCount;
 
   // The pot may be setting 0–5 V for 0–3 kV (on the 205B-03R). For instance:
   //   HV_kV = (potVolts / 5.0) * 3.0;
@@ -120,6 +132,7 @@ void setup()
   // Initialize the I²C bus, ADS1115, and set sample rate/gain if desired
   Wire.begin();   
   ads.begin();
+  ads.setDataRate(RATE_ADS1115_860SPS); //Set data rate
   // Optionally pick a data rate:
   //   ads.setDataRate(RATE_ADS1115_128SPS); // default
   // or  ads.setDataRate(RATE_ADS1115_250SPS);
@@ -135,6 +148,7 @@ void setup()
   pinMode(SET_BERTAN_20KV, INPUT_PULLUP);
   pinMode(SET_MATSUSADA_1KV, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
+  delay(50); // Make sure pullup stable
   
   // Initialize the LCD
   lcd.init();
@@ -183,9 +197,13 @@ void setup()
 
   timer.every(150, read_value); //Setup timer callback
   timer.every(200, display_value); //Setup timer callback
+  timer.every(1000 * 60 * 30, clear_display); //Clear display every 30 minutes
+
+  wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 }
 
 void loop()
 {
+  wdt_reset(); //Feed dog
   timer.tick();
 }
