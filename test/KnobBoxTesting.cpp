@@ -71,9 +71,9 @@ bool read_value(void *) { //Callback to read ADC
   // The polarity pin is open-collector; if you’ve got a pull-up to 5 V, reading near 0 means
   // positive polarity, near 5 means negative. You can threshold it to figure out text labels.
 
-  hvProgram_V = (potVolts / 5.0) * voltage_multiplier;     // example for 3 kV supply
-  measuredHV_V = (vmonVolts / 5.0) * voltage_multiplier;   // for 3 kV supply
-  measuredI_mA  = (imonVolts / 5.0) * current_multiplier;  // for 10 mA max rating
+  hvProgram_V = (potVolts / 5.0) * voltage_multiplier;     //programmed voltage set * voltage_multiplier
+  measuredHV_V = (vmonVolts / 5.0) * voltage_multiplier;   // reading voltage *voltage_multiplier
+  measuredI_mA  = (imonVolts / 5.0) * current_multiplier;  // reading current * voltage_multiplier
 
   return true; // repeat? true
 }
