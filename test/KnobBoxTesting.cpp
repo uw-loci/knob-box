@@ -83,6 +83,15 @@ char vbuffer[16];
 String current;
 
 bool display_value(void *) { //Callback to Display value
+  // Print results to Serial
+  Serial.print("Set: ");
+  Serial.print(hvProgram_V, 0);
+  Serial.print(" V,  HV: ");
+  Serial.print(measuredHV_V, 0);
+  Serial.print(" V,  I: ");
+  Serial.print(measuredI_mA, 2);
+  Serial.print(" mA");
+
   // Display two readings on each of the two LCD rows
   // Row 1: HV setpoint (kV) and measured HV
   sprintf(buffer, "Vs:%5dV ", int(hvProgram_V));
@@ -178,14 +187,5 @@ void setup()
 
 void loop()
 {
-  // Print results to Serial
-  Serial.print("Set: ");
-  Serial.print(hvProgram_V, 0);
-  Serial.print(" V,  HV: ");
-  Serial.print(measuredHV_V, 0);
-  Serial.print(" V,  I: ");
-  Serial.print(measuredI_mA, 2);
-  Serial.print(" mA");
-
   timer.tick();
 }
