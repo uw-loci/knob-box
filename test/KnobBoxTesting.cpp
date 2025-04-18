@@ -181,8 +181,8 @@ void setup()
   delay(1000);  //Wait a little bit for everything ready
   lcd.clear();
 
-  timer.every(200, read_value); //Setup timer callback
-  timer.every(250, display_value); //Setup timer callback
+  timer.every(150, read_value); //Setup timer callback
+  timer.every(200, display_value); //Setup timer callback
 }
 
 void loop()
