@@ -133,9 +133,9 @@ void setup()
   lcd.clear();
   lcd.setCursor(0, 0);
   if(!digitalRead(SET_BERTAN_3KV)){         //Pin 48 pull down
-    lcd.print("Bertan 3kV Setup");
+    lcd.print("Bertan");
     lcd.setCursor(0, 1);
-    lcd.print("20kV Setup");
+    lcd.print("3kV Setup");
     voltage_multiplier = 3000.0;
     current_multiplier = 10.0;
   }else if(!digitalRead(SET_BERTAN_20KV)){  //Pin 50 pull down
