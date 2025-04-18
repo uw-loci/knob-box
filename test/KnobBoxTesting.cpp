@@ -80,7 +80,7 @@ bool read_value(void *) { //Callback to read ADC
 
 char buffer[16];
 char vbuffer[16];
-String current;
+char current[8];
 
 bool display_value(void *) { //Callback to Display value
   // Print results to Serial
@@ -94,20 +94,20 @@ bool display_value(void *) { //Callback to Display value
 
   // Display two readings on each of the two LCD rows
   // Row 1: HV setpoint (kV) and measured HV
-  sprintf(buffer, "Vs:%5dV ", int(hvProgram_V));
+  snprintf(buffer, 16 * sizeof(char), "Vs:%5dV ", int(hvProgram_V));
 
   lcd.setCursor(0, 0);
   lcd.print(buffer);
   lcd.setCursor(10, 0);
   lcd.print("I:");
 
-  sprintf(vbuffer, "V:%5dV ", int(measuredHV_V));
-  current = String(measuredI_mA,1) + "mA  ";
+  snprintf(vbuffer, 16 * sizeof(char), "V:%5dV ", int(measuredHV_V));
   // Row 2: measured current (mA) and polarity
   lcd.setCursor(0, 1);
   lcd.print(vbuffer);
   lcd.setCursor(10, 1);
-  lcd.print(current);
+  lcd.print(measuredI_mA,1);
+  lcd.print("mA ");
   
   return true; // repeat? true
 }
