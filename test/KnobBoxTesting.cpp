@@ -90,7 +90,7 @@ bool display_value(void *) { //Callback to Display value
   Serial.print(measuredHV_V, 0);
   Serial.print(" V,  I: ");
   Serial.print(measuredI_mA, 2);
-  Serial.print(" mA");
+  Serial.println(" mA");
 
   // Display two readings on each of the two LCD rows
   // Row 1: HV setpoint (kV) and measured HV
