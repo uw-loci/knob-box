@@ -182,7 +182,7 @@ void setup()
   lcd.clear();
 
   timer.every(200, read_value); //Setup timer callback
-  timer.every(150, display_value); //Setup timer callback
+  timer.every(250, display_value); //Setup timer callback
 }
 
 void loop()
