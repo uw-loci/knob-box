@@ -95,12 +95,12 @@ Set:  750 V,  HV:  742 V,  I: 0.15 mA
 One line every 200 ms, newline‑terminated.
 
 ### Building & Uploading
-### Arduino CLI
+#### Arduino CLI
 arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 .
 arduino-cli upload  -p /dev/ttyACM0 --fqbn arduino:avr:mega:cpu=atmega2560 .
 (Or use PlatformIO: platformio run -t upload.)
 
-### Extending the Firmware
+#### Extending the Firmware
 * Add a PSU – reserve a new input pin, duplicate the jumper‑detect block, set new multipliers.
 * Change refresh rates – adjust the two timer periods; keep display ≥ read.
 * Alter LCD layout – edit display_value() only; rest of the logic is unaffected.
