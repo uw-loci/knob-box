@@ -62,7 +62,14 @@ Target board: **Arduino Mega 2560** (ATmega2560).
 
 4. Enable the AVR watchdog (`8 s`).
 
-### Main Loop
+### Main Loop (`loop()`)
+
+```cpp
+void loop() {
+  wdt_reset();     // kick watchdog
+  timer.tick();    // run any due callbacks
+}
+```
 
 No delay() calls — MCU stays responsive.
 
@@ -79,26 +86,26 @@ ADC & Scaling
 * Sample rate 860 SPS ensures a fresh reading every 150 ms.
 
 * Conversions:
-HV_set (V)  = potVolts / 5 × V_multiplier
-HV_meas (V) = vmonVolts / 5 × V_multiplier
-I_meas (mA) = imonVolts / 5 × I_multiplier
+  - HV_set (V)  = potVolts / 5 × V_multiplier
+  - HV_meas (V) = vmonVolts / 5 × V_multiplier
+  - I_meas (mA) = imonVolts / 5 × I_multiplier
 
 Serial Log Format
 Set:  750 V,  HV:  742 V,  I: 0.15 mA
 One line every 200 ms, newline‑terminated.
 
-Building & Uploading
+### Building & Uploading
 # Arduino CLI
 arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 .
 arduino-cli upload  -p /dev/ttyACM0 --fqbn arduino:avr:mega:cpu=atmega2560 .
 (Or use PlatformIO: platformio run -t upload.)
 
-Extending the Firmware
+### Extending the Firmware
 * Add a PSU – reserve a new input pin, duplicate the jumper‑detect block, set new multipliers.
 * Change refresh rates – adjust the two timer periods; keep display ≥ read.
 * Alter LCD layout – edit display_value() only; rest of the logic is unaffected.
 
-## Branching and Pull Request Strategy
+### Branching and Pull Request Strategy
 
 Our repository uses a structured branching strategy with two primary branches:
 
