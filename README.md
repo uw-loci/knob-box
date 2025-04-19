@@ -68,7 +68,7 @@ Target board: **Arduino Mega 2560** (ATmega2560).
 void loop() {
   wdt_reset();     // kick watchdog
   timer.tick();    // run any due callbacks
-}
+} ```
 
 No delay() calls — MCU stays responsive.
 
