@@ -62,13 +62,7 @@ Target board: **Arduino Mega 2560** (ATmega2560).
 
 4. Enable the AVR watchdog (`8 s`).
 
-### Main Loop (`loop()`)
-
-```cpp
-void loop() {
-  wdt_reset();     // kick watchdog
-  timer.tick();    // run any due callbacks
-} ```
+### Main Loop
 
 No delay() calls — MCU stays responsive.
 
