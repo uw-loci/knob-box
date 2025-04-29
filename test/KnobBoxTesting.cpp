@@ -10,6 +10,10 @@
 //Watch dog timer
 #include <avr/wdt.h>
 
+//Modbus
+#include <ModbusSerial.h>
+//Modbus ID
+#define DEVICE_ID   2
 // Create the ADS1115 object
 Adafruit_ADS1115 ads;  
 
@@ -19,6 +23,23 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 //Timer for read ADC Value
 Timer<3, millis> timer;
+
+//Modbus enum
+enum {
+  COMMAND,
+  MODE,
+  V_SET,
+  V_READ,
+  I_READ,
+  OVERCURRENT_TH,
+  OVERCURRENT
+} MODBUS_REG;
+
+ModbusSerial ModbusObj (Serial, DEVICE_ID, -1);
+
+int cmd_reg = 0;
+int mode_reg = 0;
+int overcurrent_threshold = 0;
 
 // Channel assignment:
 //   A0 -> Voltage Monitor from Bertan 
@@ -87,6 +108,14 @@ bool read_value(void *) { //Callback to read ADC
   measuredHV_V = (vmonVolts / 5.0) * voltage_multiplier;   // reading voltage *voltage_multiplier
   measuredI_mA  = (imonVolts / 5.0) * current_multiplier;  // reading current * voltage_multiplier
 
+  #ifndef DEBUG
+  ModbusObj.setIreg(I_READ, measuredI_mA);
+  ModbusObj.setIreg(V_SET, hvProgram_V);
+  ModbusObj.setIreg(V_READ, measuredHV_V);
+  if((imonVolts* current_multiplier) > measuredI_mA)
+    ModbusObj.setIsts(OVERCURRENT,1);
+  #endif
+
   return true; // repeat? true
 }
 
@@ -95,6 +124,7 @@ char vbuffer[16];
 char current[8];
 
 bool display_value(void *) { //Callback to Display value
+  #ifdef DEBUG
   // Print results to Serial
   Serial.print("Set: ");
   Serial.print(hvProgram_V, 0);
@@ -103,6 +133,7 @@ bool display_value(void *) { //Callback to Display value
   Serial.print(" V,  I: ");
   Serial.print(measuredI_mA, 2);
   Serial.println(" mA");
+  #endif
 
   // Display two readings on each of the two LCD rows
   // Row 1: HV setpoint (kV) and measured HV
@@ -124,11 +155,20 @@ bool display_value(void *) { //Callback to Display value
   return true; // repeat? true
 }
 
+void ModBuspacketHandler(){
+  overcurrent_threshold = ModbusObj.Hreg(OVERCURRENT_TH);
+  cmd_reg = ModbusObj.Hreg(COMMAND);
+}
+
 void setup()
 {
+  #ifdef DEBUG
   Serial.begin(9600);
   Serial.println("High voltage power supply Monitoring with ADS1115 Test");
-
+  #else
+  Serial.begin(9600,SERIAL_8E1);
+  ModbusObj.config(9600);
+  #endif
   // Initialize the I²C bus, ADS1115, and set sample rate/gain if desired
   Wire.begin();   
   ads.begin();
@@ -149,6 +189,16 @@ void setup()
   pinMode(SET_MATSUSADA_1KV, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
   delay(50); // Make sure pullup stable
+
+  #ifndef DEBUG
+  ModbusObj.addHreg(COMMAND, cmd_reg);
+  ModbusObj.addIreg(MODE, mode_reg);
+  ModbusObj.addIreg(V_SET, hvProgram_V);
+  ModbusObj.addIreg(V_READ, measuredHV_V);
+  ModbusObj.addIreg(I_READ, measuredI_mA);
+  ModbusObj.addHreg(OVERCURRENT_TH, overcurrent_threshold);
+  ModbusObj.addIsts(OVERCURRENT);
+  #endif
   
   // Initialize the LCD
   lcd.init();
@@ -161,23 +211,30 @@ void setup()
     lcd.print("3kV Setup");
     voltage_multiplier = 3000.0;
     current_multiplier = 10.0;
+    ModbusObj.setIreg(MODE, 0);
   }else if(!digitalRead(SET_BERTAN_20KV)){  //Pin 50 pull down
     lcd.print("Bertan");
     lcd.setCursor(0, 1);
     lcd.print("20kV Setup");
     voltage_multiplier = 20000.0;
     current_multiplier = 1.0;
+    ModbusObj.setIreg(MODE, 1);
   }else if(!digitalRead(SET_MATSUSADA_1KV)){//Pin 52 pull down
     lcd.print("Matsusada");
     lcd.setCursor(0, 1);
     lcd.print("1kV Setup");
     voltage_multiplier = 1000.0;
     current_multiplier = 30.0;
+    ModbusObj.setIreg(MODE, 2);
   }else{                                    //Nothing connencted
     lcd.print("Error");
     lcd.setCursor(0,1);
     lcd.print("No mode set!");
+    ModbusObj.setIreg(MODE, 255);
     while (true){//Halt everything, indicate error through LED_BUILTIN
+      #ifndef DEBUG
+      ModbusObj.task();
+      #endif
       digitalWrite(LED_BUILTIN, HIGH);
       delay(250);
       digitalWrite(LED_BUILTIN, LOW);
@@ -195,7 +252,7 @@ void setup()
   delay(1000);  //Wait a little bit for everything ready
   lcd.clear();
 
-  timer.every(150, read_value); //Setup timer callback
+  timer.every(100, read_value); //Setup timer callback
   timer.every(200, display_value); //Setup timer callback
   timer.every(1000 * 60 * 30, clear_display); //Clear display every 30 minutes
 
@@ -205,5 +262,9 @@ void setup()
 void loop()
 {
   wdt_reset(); //Feed dog
+  #ifndef DEBUG
+  ModbusObj.task();
+  ModBuspacketHandler();
+  #endif
   timer.tick();
 }
