@@ -108,11 +108,13 @@ bool read_value(void *) { //Callback to read ADC
   measuredHV_V = (vmonVolts / 5.0) * voltage_multiplier;   // reading voltage *voltage_multiplier
   measuredI_mA  = (imonVolts / 5.0) * current_multiplier;  // reading current * voltage_multiplier
 
+  #ifndef DEBUG
   ModbusObj.setIreg(I_READ, measuredI_mA);
   ModbusObj.setIreg(V_SET, hvProgram_V);
   ModbusObj.setIreg(V_READ, measuredHV_V);
   if((imonVolts* current_multiplier) > measuredI_mA)
     ModbusObj.setIsts(OVERCURRENT,1);
+  #endif
 
   return true; // repeat? true
 }
@@ -250,7 +252,7 @@ void setup()
   delay(1000);  //Wait a little bit for everything ready
   lcd.clear();
 
-  timer.every(150, read_value); //Setup timer callback
+  timer.every(100, read_value); //Setup timer callback
   timer.every(200, display_value); //Setup timer callback
   timer.every(1000 * 60 * 30, clear_display); //Clear display every 30 minutes
 
