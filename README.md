@@ -43,21 +43,21 @@ Target board: **Arduino Mega 2560** (ATmega2560).
 
 ### Startup (`setup()`)
 
-1. Initialise Serial, I²C, ADS1115, and LCD.  
+1. Initialize Serial, I²C, ADS1115, and LCD.  
 2. Auto‑detect PSU via pins 48/50/52 and set multipliers:
 
 | Model | Full‑scale V | Full‑scale I | `voltage_multiplier` | `current_multiplier` |
 |-------|--------------|--------------|----------------------|----------------------|
-| Bertan 205B‑03R | 3 000 V | 10 mA | 3000 | 10 |
-| Bertan 205B‑20R | 20 000 V | 1 mA | 20000 | 1 |
-| Matsusada 1 kV | 1 000 V | 30 mA | 1000 | 30 |
+| Bertan 205B‑03R |  3 000 V | 10 mA |  3000 | 10 |
+| Bertan 205B‑20R | 20 000 V |  1 mA | 20000 |  1 |
+| Matsusada 1 kV  |  1 000 V | 30 mA |  1000 | 30 |
 
 3. Register three non‑blocking timers (arduino‑timer):
 
 | Slot | Callback | Period | Purpose |
 |------|----------|--------|---------|
-| 0 | `read_value()` | 150 ms | Read ADC & compute engineering units |
-| 1 | `display_value()` | 200 ms | Update LCD and Serial |
+| 0 | `read_value()`    | 150 ms | Read ADC & compute engineering units  |
+| 1 | `display_value()` | 200 ms | Update LCD and Serial                 |
 | 2 | `clear_display()` | 30 min | `lcd.clear()` to wipe any ghost chars |
 
 4. Enable the AVR watchdog (`8 s`).
@@ -91,7 +91,7 @@ ADC & Scaling
   - I_meas (mA) = imonVolts / 5 × I_multiplier  
 
 Serial Log Format
-Set:  750 V,  HV:  742 V,  I: 0.15 mA
+Set:  750 V,  HV:  742 V,  I: 0.152 mA
 One line every 200 ms, newline‑terminated.
 
 ### Building & Uploading
