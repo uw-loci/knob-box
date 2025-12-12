@@ -21,12 +21,13 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 Timer<3, millis> timer;
 
 // Channel assignment:
-//   A0 -> Voltage Monitor from Bertan 
-//   A1 -> Pot (voltage program setting)
-//   A2 -> Current Monitor from Bertan
-#define CH_VMON      0
-#define CH_POT       1
-#define CH_IMON      2
+//   A0 -> Pot (voltage program setting)
+//   A1 -> Current Monitor from Bertan
+//   A2 -> Voltage Monitor from Bertan 
+// This was changed from the 902b tests
+#define CH_POT       0
+#define CH_IMON      1
+#define CH_VMON      2
 
 //Power supply mode pin define
 #define SET_BERTAN_3KV 48
