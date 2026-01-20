@@ -107,82 +107,99 @@ char buffer[21]; // buffer to store formatted string to print
 /* Display Measured Voltage, Current, Set Voltage, and Thresholds on LCD via I2C bus. */
 bool display_value()
 {
+
+    // make current values printable -> convert from float to string
+    char meas_i_buf[10];
+    dtostrf(measuredI_mA, 6, 3, meas_i_buf);
+    char comp_i_buf[10];
+    dtostrf(icomp_mA, 3, 1, comp_i_buf);
+
     switch(ps_id) {
         case 0: // -1kV Matsusada
-            snprintf(buffer, 21 * sizeof(char), "Set V:   %4dV     ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   -%4dV     ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  %4dV     ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  -%4dV     ", int(measuredHV_V));
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA   ", measuredI_mA);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", meas_i_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %.1fmA %4dV  ", icomp_mA, vcomp_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", comp_i_buf, vcomp_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return;
+            return true;
         
         case 1: // 1kV Matsusada
-            snprintf(buffer, 21 * sizeof(char), "Set V:   %4dV      ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:  +%4dV      ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  %4dV      ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V: +%4dV      ", int(measuredHV_V));
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA   ", measuredI_mA);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", meas_i_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %.1fmA %4dV  ", icomp_mA, vcomp_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", comp_i_buf, vcomp_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return;
+            return true;
 
         case 2: // +3kV Bertan
-            snprintf(buffer, 21 * sizeof(char), "Set V:   %4dV      ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:  +%4dV      ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  %4dV      ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V: +%4dV      ", int(measuredHV_V));
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA   ", measuredI_mA);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", meas_i_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %.1fmA %4dV  ", icomp_mA, vcomp_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", comp_i_buf, vcomp_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return;
+            return true;
 
         case 3: // +20kV Bertan
-            snprintf(buffer, 21 * sizeof(char), "Set V:   +%.3fkV  ", (programmedHV_V / 1000.0));
+
+            // make voltage values printable -> convert from float to string
+            char set_v_buf[10];
+            dtostrf((programmedHV_V / 1000.0), 5, 2, set_v_buf);
+            char meas_v_buf[10];
+            dtostrf((measuredHV_V / 1000.0), 5, 2, meas_v_buf);
+            char comp_v_buf[10];
+            dtostrf((vcomp_V / 1000.0), 4, 1, comp_v_buf);
+
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%skV  ", set_v_buf);
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%.3fkV  ", (measuredHV_V / 1000.0));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%skV  ", meas_v_buf);
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA    ", measuredI_mA);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA    ", meas_i_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig:  %.1fmA %.1fkV ", icomp_mA, (vcomp_V / 1000.0));
+            snprintf(buffer, 21 * sizeof(char), "Trig:  %smA %skV ", comp_i_buf, comp_v_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
+
+            return true;
     }
-    return true; // repeat? yes
 }
 
 void setup()
