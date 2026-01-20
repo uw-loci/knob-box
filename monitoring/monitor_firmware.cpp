@@ -7,10 +7,6 @@
     - detect fault conditions
     - read EN switch */
 
-    
-// Include config file for the per-board settings
-#include <config.h>
-
 #include <arduino-timer.h>
 #include <Wire.h>
 
@@ -28,17 +24,18 @@ Adafruit_ADS1115 ads;
 // (Check your LCD’s documentation for its I²C address.)
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-//Power supply mode pin define
-#define SET_BERTAN_3KV 48
-#define SET_BERTAN_20KV 50
-#define SET_MATSUSADA_1KV 52
-
 // Global ID tracking which arduino this is:
 //   0: -1kV
 //   1: +1kV
 //   2: +3kV
 //   3: +20kV
 int ps_id;
+
+// Specs for specific power supply
+float hv_rated_V; // "rated voltage" really just the max output of the HVPSU
+float i_rated_mA;
+float hv_polarity;
+float fullscale; // Matsusadas: 0-10V, Bertans: 0-5V
 
 /* External ADC Channel Assignment: 
     A0 -> Current Monitoring 
@@ -82,7 +79,7 @@ const float voltsPerCount = 0.1875F / 1000.0F;
         - Beams Armed Switch
     Other Signals (for Matsusadas):
         - reset state (control the yellow LEDs */
-void read_value()
+bool read_value()
 {
     
     float imon_raw = ads.readADC_SigleEnded(CH_IMON);
@@ -95,35 +92,37 @@ void read_value()
     float vset_volts = vset_raw * voltsPerCount; 
 
     // Now Convert to full scale HV
-    float measuredI_mA = (imon_volts / 5.0) * voltage_mulitplier;
-    float measuredHV_V = (vmon_volts / 5.0) * voltage_mulitplier;
-    float programmedHV_V = (vset_volts / 5.0) * voltage_mulitplier;
-
+    measuredI_mA = (imon_volts / fullscale) * i_rated_mA;
+    measuredHV_V = (vmon_volts / fullscale) * hv_rated_V * hv_polarity;
+    programmedHV_V = (vset_volts / fullscale) * hv_rated_V * hv_polarity;
 
     icomp_mA = analogRead(I_COMP) * (5.0 / 1023.0);
     vcomp_V = analogRead(V_COMP) * (5.0 / 1023.0);
 
+    return true; // repeat? yes
 }
 
+char buffer[21]; // buffer to store formatted string to print
+
 /* Display Measured Voltage, Current, Set Voltage, and Thresholds on LCD via I2C bus. */
-void display_value()
+bool display_value()
 {
     switch(ps_id) {
         case 0: // -1kV Matsusada
-            snprintf(buffer, 21 * sizeof(char), "Set V:   -%4dV     ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   %4dV     ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  -%4dV     ", int(measuredHV_V));
-            lcd.setCursor(0,1)
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  %4dV     ", int(measuredHV_V));
+            lcd.setCursor(0,1);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA   ", measuredI_mA);
-            lcd.setCursor(0,2)
+            lcd.setCursor(0,2);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig: %.1fmA %4dV  ", icomp_mA, vcomp_V);
-            lcd.setCursor(0,3)
+            lcd.setCursor(0,3);
             lcd.print(buffer);
 
             return;
@@ -134,15 +133,15 @@ void display_value()
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Meas V:  %4dV      ", int(measuredHV_V));
-            lcd.setCursor(0,1)
+            lcd.setCursor(0,1);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA   ", measuredI_mA);
-            lcd.setCursor(0,2)
+            lcd.setCursor(0,2);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig: %.1fmA %4dV  ", icomp_mA, vcomp_V);
-            lcd.setCursor(0,3)
+            lcd.setCursor(0,3);
             lcd.print(buffer);
 
             return;
@@ -153,15 +152,15 @@ void display_value()
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Meas V:  %4dV      ", int(measuredHV_V));
-            lcd.setCursor(0,1)
+            lcd.setCursor(0,1);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA   ", measuredI_mA);
-            lcd.setCursor(0,2)
+            lcd.setCursor(0,2);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig: %.1fmA %4dV  ", icomp_mA, vcomp_V);
-            lcd.setCursor(0,3)
+            lcd.setCursor(0,3);
             lcd.print(buffer);
 
             return;
@@ -172,23 +171,24 @@ void display_value()
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Meas V:  +%.3fkV  ", (measuredHV_V / 1000.0));
-            lcd.setCursor(0,1)
+            lcd.setCursor(0,1);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Current: %.3fmA    ", measuredI_mA);
-            lcd.setCursor(0,2)
+            lcd.setCursor(0,2);
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig:  %.1fmA %.1fkV ", icomp_mA, (vcomp_V / 1000.0));
-            lcd.setCursor(0,3)
+            lcd.setCursor(0,3);
             lcd.print(buffer);
     }
+    return true; // repeat? yes
 }
 
 void setup()
 {
     Serial.begin(9600);
-    Serial.println("High Voltage power supply Monitoring with ADS1115");
+    Serial.println("High Voltage Power Supply Monitoring with ADS1115");
 
     // Initialize the ADS1115 and I2C bus
     Wire.begin();
@@ -201,22 +201,29 @@ void setup()
     lcd.clear();
     lcd.setCursor(0, 0);
 
-    // Init pin for checking
-    pinMode(SET_BERTAN_3KV, INPUT_PULLUP);
-    pinMode(SET_BERTAN_20KV, INPUT_PULLUP);
-    pinMode(SET_MATSUSADA_1KV, INPUT_PULLUP);
-    delay(50); // Make sure pullup stable
-
-    if (!digitalRead(SET_BERTAN_3KV)) {
-        voltage_multiplier = 3000.0;
-        current_multiplier = 10.0;
-    } else if (!digitalRead(SET_BERTAN_20KV)) {
-        voltage_multiplier = 20000.0;
-        current_multiplier = 1.0;
-    } else if (!digitalRead(SET_MATSUSADA_1KV)) {
-        voltage_multiplier = 1000.0;
-        current_multiplier = 30.0;
-    } // TODO -1kV????
+    // Configure power supply specs 
+    switch (ps_id) {
+        case 0: // -1kV Matsusada
+            hv_rated_V = 1000.0;
+            i_rated_mA = 30.0;
+            hv_polarity = -1.0;
+            fullscale = 10.0;
+        case 1: // +1kV Matsusada
+            hv_rated_V = 1000.0;
+            i_rated_mA = 30.0;
+            hv_polarity = 1.0;
+            fullscale = 10.0;
+        case 2: // +3kV Bertan
+            hv_rated_V = 3000.0;
+            i_rated_mA = 10.0;
+            hv_polarity = 1.0;
+            fullscale = 5.0;
+        case 3: // +20kV Bertan
+            hv_rated_V = 20000.0;
+            i_rated_mA = 1.0;
+            hv_polarity = 1.0;
+            fullscale = 5.0;
+    }
 
     timer.every(150, read_value);
     timer.every(200, display_value);
