@@ -1,10 +1,11 @@
 /* Central Application Logic: (from HW dev spec)
-    - read external ADC
-    - read internal ADC
-    - apply scaling
-    - update LCD
+    - read external ADC, done
+    - read internal ADC, done
+    - apply scaling, done
+    - update LCD, done
     - tx over RS-485
-    - detect fault conditions
+    - detect fault conditions -> 3kV arduino recieves logic arduino flags to comm with dashboard
+    - detect reset state for matsusadas and update led
     - read EN switch */
 
 #include <arduino-timer.h>
@@ -63,6 +64,21 @@ float vcomp_V;
 
 /* Scaling Parameters */
 const float voltsPerCount = 0.1875F / 1000.0F;
+
+/* Yellow Matsusada Reset Indicator Light */
+#define RESET_LED 6
+
+/* HVPSU Enable Switch (active low) */
+#define HV_ENABLE 7
+
+/* Arm Beams Switch (active low) */
+#define ARM_BEAMS 11
+
+/* CCS Power Allow Switch (active low) */
+#define CSS_POWER_ALLOW 12
+
+/* Arm 80kV Switch (active low) */
+#define ARM_80KV 13
 
 /* Read and Scale all values:
     From external ADC (ADS1115):
@@ -135,11 +151,11 @@ bool display_value()
             return true;
         
         case 1: // 1kV Matsusada
-            snprintf(buffer, 21 * sizeof(char), "Set V:  +%4dV      ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V: +%4dV      ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", int(measuredHV_V));
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
@@ -154,11 +170,11 @@ bool display_value()
             return true;
 
         case 2: // +3kV Bertan
-            snprintf(buffer, 21 * sizeof(char), "Set V:  +%4dV      ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V: +%4dV      ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", int(measuredHV_V));
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
@@ -194,13 +210,15 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig:  %smA %skV ", comp_i_buf, comp_v_buf);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", comp_i_buf, comp_v_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
             return true;
     }
 }
+
+bool update_
 
 void setup()
 {
@@ -218,18 +236,29 @@ void setup()
     lcd.clear();
     lcd.setCursor(0, 0);
 
-    // Configure power supply specs 
+    pinMode(HV_ENABLE, INPUT_PULLUP);
+    pinMode(ARM_BEAMS, INPUT_PULLUP);
+    pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
+    pinMode(ARM_80KV, INPUT_PULLUP);
+
+    // Configure HVPSU specs, do some HVPSU-specific operations
     switch (ps_id) {
         case 0: // -1kV Matsusada
             hv_rated_V = 1000.0;
             i_rated_mA = 30.0;
             hv_polarity = -1.0;
             fullscale = 10.0;
+
+            pinMode(RESET_LED, OUTPUT);
+
         case 1: // +1kV Matsusada
             hv_rated_V = 1000.0;
             i_rated_mA = 30.0;
             hv_polarity = 1.0;
             fullscale = 10.0;
+
+            pinMode(RESET_LED, OUTPUT);
+
         case 2: // +3kV Bertan
             hv_rated_V = 3000.0;
             i_rated_mA = 10.0;
