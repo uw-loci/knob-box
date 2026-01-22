@@ -21,8 +21,7 @@
 // Create the ADS1115 object
 Adafruit_ADS1115 ads; 
 
-// Create the LCD object at address 0x27 or 0x3F, depending on your module
-// (Check your LCD’s documentation for its I²C address.)
+// 20x4 LCD Address is 0x27
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 // Global ID tracking which arduino this is:
@@ -57,6 +56,8 @@ float programmedHV_V;
 #define I_COMP A0
 #define V_COMP A1
 
+// TODO is the above right?
+
 // Reset State Thresholds (change after testing matsusada reset)
 const float RESET_THRESHOLD_V = 0.3; // V
 const float RESET_THRESHOLD_I = 0.3; // mA
@@ -67,6 +68,7 @@ float vcomp_V;
 // TODO reset/en
 
 /* Scaling Parameters */
+ads.setGain(GAIN_TWOTHIRDS); // deafult, but want to be sure
 const float voltsPerCount = 0.1875F / 1000.0F;
 
 /* Yellow Matsusada Reset Indicator Light */
@@ -94,18 +96,13 @@ bool reset_state = false;
         - current threshold
         - voltage threshold
     Other Signals (for 3kV):
-        - Logic arduino flags
-        - 80kV Armed Switch
-        - CCS Power Switch
-        - Beams Armed Switch
-    Other Signals (for Matsusadas):
-        - reset state (control the yellow LEDs */
+        - Logic arduino flags */
 bool read_value()
 {
     
-    float imon_raw = ads.readADC_SigleEnded(CH_IMON);
-    float vmon_raw = ads.readADC_SigleEnded(CH_VMON);
-    float vset_raw = ads.readADC_SigleEnded(CH_VSET);
+    float imon_raw = ads.readADC_SingleEnded(CH_IMON);
+    float vmon_raw = ads.readADC_SingleEnded(CH_VMON);
+    float vset_raw = ads.readADC_SingleEnded(CH_VSET);
 
     // Convert from raw ADC value to voltage between 0-5V.
     float imon_volts = imon_raw * voltsPerCount; 
@@ -124,9 +121,19 @@ bool read_value()
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
     the potentiometer set voltage is greater than a near zero threshold, but both the actual 
     current and actual voltage are at near zero values.*/
-    if (ps_id == 0 || ps_id == 1) {
-        if (digitalRead(HV_ENABLE) == LOW && programmedHV_V > 5 && measuredI_mA < 3 && measuredHV) 
+    if (ps_id == 0 || ps_id == 1) { // Matsusadas
+        if (reset_state == false && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
+            // reset state found
+            digitalWrite(RESET_LED, HIGH);
+            reset_state = true;
+        } else if (reset_state == true && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V > RESET_THRESHOLD_V && measuredI_mA > RESET_THRESHOLD_I) {
+            // psu has come out of reset state
+            digitalWrite(RESET_LED, LOW);
+            reset_state = false;
+        }
     }
+
+    // TODO Logic Arduino flags (only for +3kV)
 
     return true; // repeat? yes
 }
@@ -161,7 +168,7 @@ bool display_value()
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return true;
+            break;
         
         case 1: // 1kV Matsusada
             snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
@@ -180,7 +187,7 @@ bool display_value()
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return true;
+            break;
 
         case 2: // +3kV Bertan
             snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
@@ -199,7 +206,7 @@ bool display_value()
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return true;
+            break;
 
         case 3: // +20kV Bertan
 
@@ -227,21 +234,12 @@ bool display_value()
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
-            return true;
+            break;
     }
-}
 
-/* From HW Dev Spec: A potential reset state is determined if the 
-output enable switch is on, the potentiometer set voltage is greater 
-than a near zero threshold, but both the actual current and actual 
-voltage are at near zero values.*/
-bool check_reset_state()
-{
-    if (digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
-        // reset state found
-        digitalWrite(RESET_LED, HIGH);
-        reset_state = true;
-    }
+    // TODO RS485 comm with the dashboard
+
+    return true;
 }
 
 void setup()
@@ -275,6 +273,8 @@ void setup()
 
             pinMode(RESET_LED, OUTPUT);
 
+            break;
+
         case 1: // +1kV Matsusada
             hv_rated_V = 1000.0;
             i_rated_mA = 30.0;
@@ -283,16 +283,23 @@ void setup()
 
             pinMode(RESET_LED, OUTPUT);
 
+            break;
+
         case 2: // +3kV Bertan
             hv_rated_V = 3000.0;
             i_rated_mA = 10.0;
             hv_polarity = 1.0;
             fullscale = 5.0;
+
+            break;
+
         case 3: // +20kV Bertan
             hv_rated_V = 20000.0;
             i_rated_mA = 1.0;
             hv_polarity = 1.0;
             fullscale = 5.0;
+
+            break;
     }
 
     
@@ -300,5 +307,12 @@ void setup()
     timer.every(200, display_value);
     timer.every(1000*60*30, clear_display); // every 30 minutes
 
+    wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 
+}
+
+void loop()
+{
+  wdt_reset(); //Feed dog
+  timer.tick();
 }
