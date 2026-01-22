@@ -30,7 +30,7 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 //   1: +1kV
 //   2: +3kV
 //   3: +20kV
-int ps_id;
+const int ps_id;
 
 // Specs for specific power supply
 float hv_rated_V; // "rated voltage" really just the max output of the HVPSU
@@ -57,6 +57,10 @@ float programmedHV_V;
 #define I_COMP A0
 #define V_COMP A1
 
+// Reset State Thresholds (change after testing matsusada reset)
+const float RESET_THRESHOLD_V = 0.3; // V
+const float RESET_THRESHOLD_I = 0.3; // mA
+
 /* Values read by internal ADC. */
 float icomp_mA;
 float vcomp_V;
@@ -67,6 +71,7 @@ const float voltsPerCount = 0.1875F / 1000.0F;
 
 /* Yellow Matsusada Reset Indicator Light */
 #define RESET_LED 6
+bool reset_state = false;
 
 /* HVPSU Enable Switch (active low) */
 #define HV_ENABLE 7
@@ -114,6 +119,14 @@ bool read_value()
 
     icomp_mA = analogRead(I_COMP) * (5.0 / 1023.0);
     vcomp_V = analogRead(V_COMP) * (5.0 / 1023.0);
+
+    // Every time we read the values from the HVPSU, we want to check for the Matsusada Reset State.
+    /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
+    the potentiometer set voltage is greater than a near zero threshold, but both the actual 
+    current and actual voltage are at near zero values.*/
+    if (ps_id == 0 || ps_id == 1) {
+        if (digitalRead(HV_ENABLE) == LOW && programmedHV_V > 5 && measuredI_mA < 3 && measuredHV) 
+    }
 
     return true; // repeat? yes
 }
@@ -218,7 +231,18 @@ bool display_value()
     }
 }
 
-bool update_
+/* From HW Dev Spec: A potential reset state is determined if the 
+output enable switch is on, the potentiometer set voltage is greater 
+than a near zero threshold, but both the actual current and actual 
+voltage are at near zero values.*/
+bool check_reset_state()
+{
+    if (digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
+        // reset state found
+        digitalWrite(RESET_LED, HIGH);
+        reset_state = true;
+    }
+}
 
 void setup()
 {
@@ -271,6 +295,7 @@ void setup()
             fullscale = 5.0;
     }
 
+    
     timer.every(150, read_value);
     timer.every(200, display_value);
     timer.every(1000*60*30, clear_display); // every 30 minutes
