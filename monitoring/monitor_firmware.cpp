@@ -45,7 +45,7 @@ float fullscale; // Matsusadas: 0-10V, Bertans: 0-5V
 #define CH_VMON 1
 #define CH_VSET 2
 
-/* Values read by External ADC. */
+/* Calculated voltage, current values */
 float measuredI_mA;
 float measuredHV_V;
 float programmedHV_V;
@@ -55,7 +55,6 @@ float programmedHV_V;
     A1 -> Voltage Comparator threshold voltage */
 #define I_COMP A0
 #define V_COMP A1
-
 // TODO is the above right?
 
 // Reset State Thresholds (change after testing matsusada reset)
@@ -86,6 +85,15 @@ bool reset_state = false;
 
 /* Arm 80kV Switch (active low) */
 #define ARM_80KV 13
+
+/* RS-485 Pins */
+#define RS485_RX 19
+#define RS485_TX 18
+#define RS485_DIR 17 // low = receive mode
+
+/* RS-485 buffer */
+#define TX_BUF_SIZE 128
+static char txBuf[TX_BUF_SIZE];
 
 /* Read and Scale all values:
     From external ADC (ADS1115):
@@ -242,6 +250,36 @@ bool display_value()
     return true;
 }
 
+/**
+ *  Send data to python dashboard.
+ */
+bool transmit_data()
+{
+
+    // Format voltage, current values to be scaled integers
+    int32_t set_voltage_e4 = (int32_t)(programmedHV_V * 10000.0f);
+    int32_t actual_voltage_e4 = (int32_t)(measuredHV_V * 10000.0f);
+    int32_t actual_current_e4 = (int32_t)(measuredI_mA * 10000.0f);
+
+    // Create a hex digit for statuses.
+    uint8_t statuses = 
+        ((digitalRead(HV_ENABLE) == LOW ? 1 : 0) << 3) |
+        ((digitalRead(ARM_BEAMS) == LOW ? 1 : 0) << 2) | 
+        ((digitalRead(CCS_POWER_ALLOW) == LOW ? 1 : 0) << 1) |
+        ((digitalRead(ARM_80KV) == LOW ? 1 : 0));
+    statuses = statuses & 0x0F;
+
+    // TODO Create bit string for logic arduino flags.
+
+    // Send data string to python gui through Serial1
+    digitalWrite(RS485_DIR_PIN, HIGH);
+    delayMicroseconds(5);
+    Serial1.println(dataString);
+    Serial1.flush();
+    delayMicroseconds(5);
+    digitalWrite(RS485_DIR_PIN, LOW);
+}
+
 void setup()
 {
     Serial.begin(9600);
@@ -262,6 +300,10 @@ void setup()
     pinMode(ARM_BEAMS, INPUT_PULLUP);
     pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
     pinMode(ARM_80KV, INPUT_PULLUP);
+
+    pinMode(RS485_DIR, OUTPUT);
+    digitalWrite(RS485_DIR, LOW); // start in receive mode
+    Serial1.begin(9600);
 
     // Configure HVPSU specs, do some HVPSU-specific operations
     switch (ps_id) {
