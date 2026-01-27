@@ -1,12 +1,12 @@
-/* Central Application Logic: (from HW dev spec)
-    - read external ADC, done
-    - read internal ADC, done
-    - apply scaling, done
-    - update LCD, done
-    - tx over RS-485
-    - detect fault conditions -> 3kV arduino recieves logic arduino flags to comm with dashboard
-    - detect reset state for matsusadas and update led
-    - read EN switch */
+/* Things to be tested/changed:
+    - reset logic: does it work, does it need separate entry/exit thresholds
+    - is ADS1115 scaling logic correct (setting gain) 
+    - RS485 timing with watchdog: flush() has been removed, does the timeout need to be lengthened? maybe the Serial.println() needs to happen in loop()? 
+    - more RS485 timing: is every 500ms good for sending data? 
+    
+    - LED functionality
+    - display functionality
+    */
 
 #include <arduino-timer.h>
 #include <Wire.h>
@@ -17,6 +17,8 @@
 #include <LiquidCrystal_I2C.h>
 // Adafruit’s unified ADS1X15 library handles both ADS1015 and ADS1115
 #include <Adafruit_ADS1X15.h>
+
+Timer<1> timer;
 
 // Create the ADS1115 object
 Adafruit_ADS1115 ads; 
@@ -29,7 +31,7 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 //   1: +1kV
 //   2: +3kV
 //   3: +20kV
-const int ps_id;
+const int ps_id = 0;
 
 // Specs for specific power supply
 float hv_rated_V; // "rated voltage" really just the max output of the HVPSU
@@ -53,9 +55,8 @@ float programmedHV_V;
 /* Internal ADC Channel Assignment:
     A0 -> Current Comparator threshold voltage 
     A1 -> Voltage Comparator threshold voltage */
-#define I_COMP A0
-#define V_COMP A1
-// TODO is the above right?
+#define I_THRESH A0
+#define V_THRESH A1
 
 // Reset State Thresholds (change after testing matsusada reset)
 const float RESET_THRESHOLD_V = 0.3; // V
@@ -64,10 +65,8 @@ const float RESET_THRESHOLD_I = 0.3; // mA
 /* Values read by internal ADC. */
 float icomp_mA;
 float vcomp_V;
-// TODO reset/en
 
 /* Scaling Parameters */
-ads.setGain(GAIN_TWOTHIRDS); // deafult, but want to be sure
 const float voltsPerCount = 0.1875F / 1000.0F;
 
 /* Yellow Matsusada Reset Indicator Light */
@@ -81,7 +80,7 @@ bool reset_state = false;
 #define ARM_BEAMS 11
 
 /* CCS Power Allow Switch (active low) */
-#define CSS_POWER_ALLOW 12
+#define CCS_POWER_ALLOW 12
 
 /* Arm 80kV Switch (active low) */
 #define ARM_80KV 13
@@ -94,6 +93,9 @@ bool reset_state = false;
 /* RS-485 buffer */
 #define TX_BUF_SIZE 128
 static char txBuf[TX_BUF_SIZE];
+
+/* +3kV Flags from Logic Arduino (there are 13 flags) */
+uint16_t flags = 0;
 
 /* Read and Scale all values:
     From external ADC (ADS1115):
@@ -122,8 +124,8 @@ bool read_value()
     measuredHV_V = (vmon_volts / fullscale) * hv_rated_V * hv_polarity;
     programmedHV_V = (vset_volts / fullscale) * hv_rated_V * hv_polarity;
 
-    icomp_mA = analogRead(I_COMP) * (5.0 / 1023.0);
-    vcomp_V = analogRead(V_COMP) * (5.0 / 1023.0);
+    icomp_mA = analogRead(I_THRESH) * (5.0 / 1023.0);
+    vcomp_V = analogRead(V_THRESH) * (5.0 / 1023.0);
 
     // Every time we read the values from the HVPSU, we want to check for the Matsusada Reset State.
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
@@ -141,7 +143,24 @@ bool read_value()
         }
     }
 
-    // TODO Logic Arduino flags (only for +3kV)
+    if (ps_id == 2) { // only for +3kV Bertan
+        // Logic Arduino flags
+        flags = 0;
+
+        flags |= (digitalRead(25) == HIGH) ? (1 << 0) : (0);
+        flags |= (digitalRead(26) == HIGH) ? (1 << 1) : (0);
+        flags |= (digitalRead(27) == HIGH) ? (1 << 2) : (0);
+        flags |= (digitalRead(28) == HIGH) ? (1 << 3) : (0);
+        flags |= (digitalRead(29) == HIGH) ? (1 << 4) : (0);
+        flags |= (digitalRead(30) == HIGH) ? (1 << 5) : (0);
+        flags |= (digitalRead(31) == HIGH) ? (1 << 6) : (0);
+        flags |= (digitalRead(32) == HIGH) ? (1 << 7) : (0);
+        flags |= (digitalRead(33) == HIGH) ? (1 << 8) : (0);
+        flags |= (digitalRead(34) == HIGH) ? (1 << 9) : (0);
+        flags |= (digitalRead(35) == HIGH) ? (1 << 10) : (0);
+        flags |= (digitalRead(36) == HIGH) ? (1 << 11) : (0);
+        flags |= (digitalRead(37) == HIGH) ? (1 << 12) : (0);
+    }
 
     return true; // repeat? yes
 }
@@ -245,8 +264,6 @@ bool display_value()
             break;
     }
 
-    // TODO RS485 comm with the dashboard
-
     return true;
 }
 
@@ -257,31 +274,46 @@ bool transmit_data()
 {
 
     // Format voltage, current values to be scaled integers
-    int32_t set_voltage_e4 = (int32_t)(programmedHV_V * 10000.0f);
-    int32_t actual_voltage_e4 = (int32_t)(measuredHV_V * 10000.0f);
-    int32_t actual_current_e4 = (int32_t)(measuredI_mA * 10000.0f);
+    uint32_t set_voltage_e4 = (uint32_t)(programmedHV_V * 10000.0f);
+    uint32_t actual_voltage_e4 = (uint32_t)(measuredHV_V * 10000.0f);
+    uint32_t actual_current_e4 = (uint32_t)(measuredI_mA * 10000.0f);
 
     // Create a hex digit for statuses.
-    uint8_t statuses = 
+    uint8_t switch_states = 
         ((digitalRead(HV_ENABLE) == LOW ? 1 : 0) << 3) |
         ((digitalRead(ARM_BEAMS) == LOW ? 1 : 0) << 2) | 
         ((digitalRead(CCS_POWER_ALLOW) == LOW ? 1 : 0) << 1) |
         ((digitalRead(ARM_80KV) == LOW ? 1 : 0));
-    statuses = statuses & 0x0F;
+    switch_states = switch_states & 0x0F;
 
-    // TODO Create bit string for logic arduino flags.
+    // Print components to buffer to be transmitted
+    snprintf(txBuf, TX_BUF_SIZE,
+        "%u;%u;%u;%x;%u",
+        set_voltage_e4,
+        actual_voltage_e4,
+        actual_current_e4,
+        switch_states,
+        flags);
 
     // Send data string to python gui through Serial1
-    digitalWrite(RS485_DIR_PIN, HIGH);
+    digitalWrite(RS485_DIR, HIGH);
     delayMicroseconds(5);
-    Serial1.println(dataString);
-    Serial1.flush();
+    Serial1.println(txBuf);
+    //Serial1.flush(); taken out due to watchdog reset concerns
     delayMicroseconds(5);
-    digitalWrite(RS485_DIR_PIN, LOW);
+    digitalWrite(RS485_DIR, LOW);
+
+    return true;
+}
+
+bool clear_display() {
+    lcd.clear();
+    return true;
 }
 
 void setup()
 {
+
     Serial.begin(9600);
     Serial.println("High Voltage Power Supply Monitoring with ADS1115");
 
@@ -289,6 +321,7 @@ void setup()
     Wire.begin();
     ads.begin();
     ads.setDataRate(RATE_ADS1115_860SPS);
+    ads.setGain(GAIN_TWOTHIRDS); // deafult, but want to be sure
 
     // Initialize the LCD
     lcd.init();
@@ -300,6 +333,21 @@ void setup()
     pinMode(ARM_BEAMS, INPUT_PULLUP);
     pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
     pinMode(ARM_80KV, INPUT_PULLUP);
+
+    // pins for logic arduino flags
+    pinMode(25, INPUT);
+    pinMode(26, INPUT);
+    pinMode(27, INPUT);
+    pinMode(28, INPUT);
+    pinMode(29, INPUT);
+    pinMode(30, INPUT);
+    pinMode(31, INPUT);
+    pinMode(32, INPUT);
+    pinMode(33, INPUT);
+    pinMode(34, INPUT);
+    pinMode(35, INPUT);
+    pinMode(36, INPUT);
+    pinMode(37, INPUT); 
 
     pinMode(RS485_DIR, OUTPUT);
     digitalWrite(RS485_DIR, LOW); // start in receive mode
@@ -348,6 +396,7 @@ void setup()
     timer.every(150, read_value);
     timer.every(200, display_value);
     timer.every(1000*60*30, clear_display); // every 30 minutes
+    timer.every(500, transmit_data);
 
     wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 
