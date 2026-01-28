@@ -62,7 +62,10 @@ float programmedHV_V;
 const float RESET_THRESHOLD_V = 0.3; // V
 const float RESET_THRESHOLD_I = 0.3; // mA
 
-/* Values read by internal ADC. */
+/* Potentiometer Values */
+float ipot_V;
+float vpot_V;
+// calculated thresholds
 float icomp_mA;
 float vcomp_V;
 
@@ -124,8 +127,10 @@ bool read_value()
     measuredHV_V = (vmon_volts / fullscale) * hv_rated_V * hv_polarity;
     programmedHV_V = (vset_volts / fullscale) * hv_rated_V * hv_polarity;
 
-    icomp_mA = analogRead(I_THRESH) * (5.0 / 1023.0);
-    vcomp_V = analogRead(V_THRESH) * (5.0 / 1023.0);
+    ipot_V = analogRead(I_THRESH) * (5.0 / 1023.0);
+    vpot_V = analogRead(V_THRESH) * (5.0 / 1023.0);
+
+    // TODO convert potentiometer values to thresholds
 
     // Every time we read the values from the HVPSU, we want to check for the Matsusada Reset State.
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
@@ -272,6 +277,9 @@ bool display_value()
  */
 bool transmit_data()
 {
+
+    // TODO implement master-slave behavior:
+    //   - this arduino should only TX data when called on by the dashboard
 
     // Format voltage, current values to be scaled integers
     uint32_t set_voltage_e4 = (uint32_t)(programmedHV_V * 10000.0f);
