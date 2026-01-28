@@ -2,9 +2,9 @@
 
 Firmware for an **Arduino Mega 2560** that  
 
-* Reads **set‑voltage**, **measured voltage**, and **measured current** from one of three power supplies (Bertan 205B‑3 kV, Bertan 205B‑20 kV, or Matsusada 1 kV / 30 mA).  
-* Displays the values on a 16 × 2 I²C LCD.  
-* Streams the same readings over USB serial.  
+* Reads **set‑voltage**, **measured voltage**, and **measured current** from one of four power supplies (Bertan 205B‑3 kV, Bertan 205B‑20 kV, Matsusada 1 kV / 30 mA, or Matsusada -1 kV / 30 mA).  
+* Displays the values on a 20 x 4 I²C LCD.  
+* Streams the same readings, using RS-485, back to the E-Beam dashboard.  
 * Runs for days without crashing thanks to: non‑blocking timers, zero heap allocations, an AVR watchdog, and a periodic LCD refresh.
 
 ---
@@ -13,17 +13,24 @@ Firmware for an **Arduino Mega 2560** that
 
 | Arduino Pin | Function | Connected To |
 |-------------|----------|--------------|
-| **48 (L3)** | `SET_BERTAN_3KV` jumper | Pull **LOW** if 3 kV PSU is attached |
-| **50 (B3)** | `SET_BERTAN_20KV` jumper | Pull **LOW** if 20 kV PSU is attached |
-| **52 (B1)** | `SET_MATSUSADA_1KV` jumper | Pull **LOW** if 1 kV / 30 mA PSU is attached |
-| **A0**      | `V‑MON`  | 0–5 V voltage‑monitor output |
-| **A1**      | `POT`    | 0–5 V set‑point potentiometer |
-| **A2**      | `I‑MON`  | 0–5 V current‑monitor output |
-| **SDA/SCL** | I²C bus  | ADS1115 + LCD backpack |
+| A0          | I comparator threshold voltage | I comparator |
+| A1          | V comparator threshold voltage | V comparator |
+| D6          | Matsusada Reset LED | Active High Output |
+| D7          | HV Enable Switch | Active Low Input | 
+| D10         | 3 kV HV Output Enable Switch | Active Low Input |
+| D11         | Arm Beams Switch | Active Low Input |
+| D12         | CCS Power Allow Switch | Active Low Input |
+| D13         | Arm 80kV Switch | Active Low Input |
+| D17         | RS-485 R/W Enable | Output |
+| D18         | TX1 | Serial |
+| D19         | RX1 | Serial |
+| D20/D21, **SDA/SCL** | I²C bus  | ADS1115 + LCD backpack |
+| D22-D24     | Logic Arduino Flags, Extra | N/A |
+| D25-D37     | Logic Arduino Flags | Flag Input |
 | 5 V / GND   | Power    | As usual |
 
-> **Note:** Only *one* of the three “SET_…” pins should be low at power‑up.  
-> Leave the others floating (internal pull‑ups are enabled).
+> **Note:** Logic Arduino Flags are only recieved by the +3kV Monitoring Arduino.
+> These flags are transmitted to the dashboard, showing the state of the Logic Arduino when an interlock was tripped.
 
 ---
 
@@ -41,10 +48,25 @@ Target board: **Arduino Mega 2560** (ATmega2560).
 
 ## How the Firmware Works
 
+### Power Supply Identification
+
+Ensure the **ps_id** field is set before flashing the Arduino: 
+```cpp
+// Global ID tracking which arduino this is:
+//   0: -1kV Matsusada
+//   1: +1kV Matsusada
+//   2: +3kV Bertan
+//   3: +20kV Bertan
+const int ps_id = 0;
+```
+
 ### Startup (`setup()`)
 
-1. Initialize Serial, I²C, ADS1115, and LCD.  
-2. Auto‑detect PSU via pins 48/50/52 and set multipliers:
+1. Initialize Serial, I²C, ADS1115, and LCD. 
+
+2. Set pin modes for interfacing with reset LED, input from switches, etc.
+
+3. Set multipliers:
 
 | Model | Full‑scale V | Full‑scale I | `voltage_multiplier` | `current_multiplier` |
 |-------|--------------|--------------|----------------------|----------------------|
@@ -52,15 +74,16 @@ Target board: **Arduino Mega 2560** (ATmega2560).
 | Bertan 205B‑20R | 20 000 V |  1 mA | 20000 |  1 |
 | Matsusada 1 kV  |  1 000 V | 30 mA |  1000 | 30 |
 
-3. Register three non‑blocking timers (arduino‑timer):
+4. Register four non‑blocking timers (arduino‑timer):
 
 | Slot | Callback | Period | Purpose |
 |------|----------|--------|---------|
 | 0 | `read_value()`    | 150 ms | Read ADC & compute engineering units  |
 | 1 | `display_value()` | 200 ms | Update LCD and Serial                 |
-| 2 | `clear_display()` | 30 min | `lcd.clear()` to wipe any ghost chars |
+| 2 | `transmit_data()` | 500 ms | Send data to dashboard if called on   |
+| 3 | `clear_display()` | 30 min | `lcd.clear()` to wipe any ghost chars |
 
-4. Enable the AVR watchdog (`8 s`).
+5. Enable the AVR watchdog (`8 s`).
 
 ### Main Loop (`loop()`)
 
