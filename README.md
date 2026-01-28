@@ -29,7 +29,7 @@ Firmware for an **Arduino Mega 2560** that
 | D25-D37     | Logic Arduino Flags | Flag Input |
 | 5 V / GND   | Power    | As usual |
 
-> **Note:** Logic Arduino Flags are only recieved by the +3kV Monitoring Arduino.
+> **Note:** Logic Arduino Flags are only recieved by the +3kV Monitoring Arduino.  
 > These flags are transmitted to the dashboard, showing the state of the Logic Arduino when an interlock was tripped.
 
 ---
