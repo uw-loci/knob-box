@@ -21,7 +21,8 @@ Firmware for an **Arduino Mega 2650** that
 | 5 V / GND   | Power    | As usual |
 
 > **Note:** Only *one* of the three “SET_…” pins should be low at power‑up.  
-> Leave the others floating (internal pull‑ups are enabled).
+> Leave the others floating (internal pull‑ups are enabled).  
+
 > **Note:** This pinout is not consistent with the finalized Knob Box firmware.
 
 ---
