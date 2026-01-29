@@ -1,11 +1,11 @@
-/* Things to be tested/changed:
+/* TODOs:
     - reset logic: does it work, does it need separate entry/exit thresholds
-    - is ADS1115 scaling logic correct (setting gain) 
-    - RS485 timing with watchdog: flush() has been removed, does the timeout need to be lengthened? maybe the Serial.println() needs to happen in loop()? 
-    - more RS485 timing: is every 500ms good for sending data? 
+
+    - is ADS1115 scaling logic correct? will the ADC voltages read all be 0-5V?
     
-    - LED functionality
-    - display functionality
+    - RS485: implement master-slave behavior
+
+    - do the flag pins need to be INPUT_PULLUP? 
     */
 
 #include <arduino-timer.h>
@@ -18,7 +18,7 @@
 // Adafruit’s unified ADS1X15 library handles both ADS1015 and ADS1115
 #include <Adafruit_ADS1X15.h>
 
-Timer<1> timer;
+Timer<4, millis> timer;
 
 // Create the ADS1115 object
 Adafruit_ADS1115 ads; 
@@ -34,10 +34,8 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 const int ps_id = 0;
 
 // Specs for specific power supply
-float hv_rated_V; // "rated voltage" really just the max output of the HVPSU
-float i_rated_mA;
-float hv_polarity;
-float fullscale; // Matsusadas: 0-10V, Bertans: 0-5V
+float ratedHV_V; // "rated voltage" really just the max output of the HVPSU
+float ratedI_mA;
 
 /* External ADC Channel Assignment: 
     A0 -> Current Monitoring 
@@ -63,18 +61,18 @@ const float RESET_THRESHOLD_V = 0.3; // V
 const float RESET_THRESHOLD_I = 0.3; // mA
 
 /* Potentiometer Values */
-float ipot_V;
-float vpot_V;
+float iPot_V;
+float vPot_V;
 // calculated thresholds
-float icomp_mA;
-float vcomp_V;
+float vThresh_V;
+float iThresh_mA;
 
 /* Scaling Parameters */
 const float voltsPerCount = 0.1875F / 1000.0F;
 
 /* Yellow Matsusada Reset Indicator Light */
 #define RESET_LED 6
-bool reset_state = false;
+bool resetState = false;
 
 /* HVPSU Enable Switch (active low) */
 #define HV_ENABLE 7
@@ -100,51 +98,50 @@ static char txBuf[TX_BUF_SIZE];
 /* +3kV Flags from Logic Arduino (there are 13 flags) */
 uint16_t flags = 0;
 
-/* Read and Scale all values:
-    From external ADC (ADS1115):
-        - monitored current
-        - monitoried voltage
-        - set voltage 
-    From Internal ADC:
-        - current threshold
-        - voltage threshold
-    Other Signals (for 3kV):
-        - Logic arduino flags */
+/**
+ * Read and scale monitored voltage and current, set voltage, and potentiometer thresholds.
+ * 
+ * Perform Matsusada reset state logic.
+ * 
+ * Read Logic Arduino Flags (only +3kV Bertan).
+ */
 bool read_value()
 {
     
-    float imon_raw = ads.readADC_SingleEnded(CH_IMON);
-    float vmon_raw = ads.readADC_SingleEnded(CH_VMON);
-    float vset_raw = ads.readADC_SingleEnded(CH_VSET);
+    int16_t imonRaw = ads.readADC_SingleEnded(CH_IMON);
+    int16_t vmonRaw = ads.readADC_SingleEnded(CH_VMON);
+    int16_t vsetRaw = ads.readADC_SingleEnded(CH_VSET);
 
     // Convert from raw ADC value to voltage between 0-5V.
-    float imon_volts = imon_raw * voltsPerCount; 
-    float vmon_volts = vmon_raw * voltsPerCount;
-    float vset_volts = vset_raw * voltsPerCount; 
+    float imonVolts = imonRaw * voltsPerCount; 
+    float vmonVolts = vmonRaw * voltsPerCount;
+    float vsetVolts = vsetRaw * voltsPerCount; 
 
     // Now Convert to full scale HV
-    measuredI_mA = (imon_volts / fullscale) * i_rated_mA;
-    measuredHV_V = (vmon_volts / fullscale) * hv_rated_V * hv_polarity;
-    programmedHV_V = (vset_volts / fullscale) * hv_rated_V * hv_polarity;
+    measuredI_mA = (imonVolts / 5.0) * ratedI_mA;
+    measuredHV_V = (vmonVolts / 5.0) * ratedHV_V;
+    programmedHV_V = (vsetVolts / 5.0) * ratedHV_V;
 
-    ipot_V = analogRead(I_THRESH) * (5.0 / 1023.0);
-    vpot_V = analogRead(V_THRESH) * (5.0 / 1023.0);
+    // Get potentiometer values and convert to 0-5V.
+    iPot_V = analogRead(I_THRESH) * (5.0 / 1023.0);
+    vPot_V = analogRead(V_THRESH) * (5.0 / 1023.0);
 
-    // TODO convert potentiometer values to thresholds
+    // Convert potentiometer values to thresholds
+    vThresh_V = (vPot_V / 5.0) * ratedHV_V;
+    iThresh_mA = (iPot_V / 5.0) * ratedI_mA;
 
-    // Every time we read the values from the HVPSU, we want to check for the Matsusada Reset State.
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
     the potentiometer set voltage is greater than a near zero threshold, but both the actual 
     current and actual voltage are at near zero values.*/
     if (ps_id == 0 || ps_id == 1) { // Matsusadas
-        if (reset_state == false && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
+        if (resetState == false && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
             // reset state found
             digitalWrite(RESET_LED, HIGH);
-            reset_state = true;
-        } else if (reset_state == true && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V > RESET_THRESHOLD_V && measuredI_mA > RESET_THRESHOLD_I) {
+            resetState = true;
+        } else if (resetState == true && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V > RESET_THRESHOLD_V && measuredI_mA > RESET_THRESHOLD_I) {
             // psu has come out of reset state
             digitalWrite(RESET_LED, LOW);
-            reset_state = false;
+            resetState = false;
         }
     }
 
@@ -152,22 +149,22 @@ bool read_value()
         // Logic Arduino flags
         flags = 0;
 
-        flags |= (digitalRead(25) == HIGH) ? (1 << 0) : (0);
-        flags |= (digitalRead(26) == HIGH) ? (1 << 1) : (0);
-        flags |= (digitalRead(27) == HIGH) ? (1 << 2) : (0);
-        flags |= (digitalRead(28) == HIGH) ? (1 << 3) : (0);
-        flags |= (digitalRead(29) == HIGH) ? (1 << 4) : (0);
-        flags |= (digitalRead(30) == HIGH) ? (1 << 5) : (0);
-        flags |= (digitalRead(31) == HIGH) ? (1 << 6) : (0);
-        flags |= (digitalRead(32) == HIGH) ? (1 << 7) : (0);
-        flags |= (digitalRead(33) == HIGH) ? (1 << 8) : (0);
-        flags |= (digitalRead(34) == HIGH) ? (1 << 9) : (0);
-        flags |= (digitalRead(35) == HIGH) ? (1 << 10) : (0);
-        flags |= (digitalRead(36) == HIGH) ? (1 << 11) : (0);
-        flags |= (digitalRead(37) == HIGH) ? (1 << 12) : (0);
+        flags |= digitalRead(25) << 0;
+        flags |= digitalRead(26) << 1;
+        flags |= digitalRead(27) << 2;
+        flags |= digitalRead(28) << 3;
+        flags |= digitalRead(29) << 4;
+        flags |= digitalRead(30) << 5;
+        flags |= digitalRead(31) << 6;
+        flags |= digitalRead(32) << 7;
+        flags |= digitalRead(33) << 8;
+        flags |= digitalRead(34) << 9;
+        flags |= digitalRead(35) << 10;
+        flags |= digitalRead(36) << 11;
+        flags |= digitalRead(37) << 12;
     }
 
-    return true; // repeat? yes
+    return true;
 }
 
 char buffer[21]; // buffer to store formatted string to print
@@ -177,10 +174,10 @@ bool display_value()
 {
 
     // make current values printable -> convert from float to string
-    char meas_i_buf[10];
-    dtostrf(measuredI_mA, 6, 3, meas_i_buf);
-    char comp_i_buf[10];
-    dtostrf(icomp_mA, 3, 1, comp_i_buf);
+    char measuredI_buf[10];
+    dtostrf(measuredI_mA, 6, 3, measuredI_buf);
+    char iThresh_buf[10];
+    dtostrf(iThresh_mA, 3, 1, iThresh_buf);
 
     switch(ps_id) {
         case 0: // -1kV Matsusada
@@ -192,11 +189,11 @@ bool display_value()
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", meas_i_buf);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", comp_i_buf, vcomp_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", iThresh_buf, vThresh_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -211,11 +208,11 @@ bool display_value()
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", meas_i_buf);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", comp_i_buf, vcomp_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", iThresh_buf, vThresh_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -230,11 +227,11 @@ bool display_value()
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", meas_i_buf);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", comp_i_buf, vcomp_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", iThresh_buf, vThresh_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -243,26 +240,26 @@ bool display_value()
         case 3: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
-            char set_v_buf[10];
-            dtostrf((programmedHV_V / 1000.0), 5, 2, set_v_buf);
-            char meas_v_buf[10];
-            dtostrf((measuredHV_V / 1000.0), 5, 2, meas_v_buf);
-            char comp_v_buf[10];
-            dtostrf((vcomp_V / 1000.0), 4, 1, comp_v_buf);
+            char programmedHV_buf[10];
+            dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
+            char measuredHV_buf[10];
+            dtostrf((measuredHV_V / 1000.0), 5, 2, measuredHV_buf);
+            char vthresh_buf[10];
+            dtostrf((vThresh_V / 1000.0), 4, 1, vThresh_buf);
 
-            snprintf(buffer, 21 * sizeof(char), "Set V:   +%skV  ", set_v_buf);
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%skV  ", programmedHV_buf);
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%skV  ", meas_v_buf);
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%skV  ", measuredHV_buf);
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA    ", meas_i_buf);
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA    ", measuredI_buf);
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", comp_i_buf, comp_v_buf);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", iThresh_buf, vThresh_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -282,25 +279,25 @@ bool transmit_data()
     //   - this arduino should only TX data when called on by the dashboard
 
     // Format voltage, current values to be scaled integers
-    uint32_t set_voltage_e4 = (uint32_t)(programmedHV_V * 10000.0f);
-    uint32_t actual_voltage_e4 = (uint32_t)(measuredHV_V * 10000.0f);
-    uint32_t actual_current_e4 = (uint32_t)(measuredI_mA * 10000.0f);
+    uint32_t setVoltage_e4 = (uint32_t)(programmedHV_V * 10000.0f);
+    uint32_t actualVoltage_e4 = (uint32_t)(measuredHV_V * 10000.0f);
+    uint32_t actualCurrent_e4 = (uint32_t)(measuredI_mA * 10000.0f);
 
     // Create a hex digit for statuses.
-    uint8_t switch_states = 
+    uint8_t switchStates = 
         ((digitalRead(HV_ENABLE) == LOW ? 1 : 0) << 3) |
         ((digitalRead(ARM_BEAMS) == LOW ? 1 : 0) << 2) | 
         ((digitalRead(CCS_POWER_ALLOW) == LOW ? 1 : 0) << 1) |
         ((digitalRead(ARM_80KV) == LOW ? 1 : 0));
-    switch_states = switch_states & 0x0F;
+    switchStates = switchStates & 0x0F;
 
     // Print components to buffer to be transmitted
     snprintf(txBuf, TX_BUF_SIZE,
         "%u;%u;%u;%x;%u",
-        set_voltage_e4,
-        actual_voltage_e4,
-        actual_current_e4,
-        switch_states,
+        setVoltage_e4,
+        actualVoltage_e4,
+        actualCurrent_e4,
+        switchStates,
         flags);
 
     // Send data string to python gui through Serial1
@@ -364,39 +361,25 @@ void setup()
     // Configure HVPSU specs, do some HVPSU-specific operations
     switch (ps_id) {
         case 0: // -1kV Matsusada
-            hv_rated_V = 1000.0;
-            i_rated_mA = 30.0;
-            hv_polarity = -1.0;
-            fullscale = 10.0;
-
+            ratedHV_V = 1000.0;
+            ratedI_mA = 30.0;
             pinMode(RESET_LED, OUTPUT);
-
             break;
 
         case 1: // +1kV Matsusada
-            hv_rated_V = 1000.0;
-            i_rated_mA = 30.0;
-            hv_polarity = 1.0;
-            fullscale = 10.0;
-
+            ratedHV_V = 1000.0;
+            ratedI_mA = 30.0;
             pinMode(RESET_LED, OUTPUT);
-
             break;
 
         case 2: // +3kV Bertan
-            hv_rated_V = 3000.0;
-            i_rated_mA = 10.0;
-            hv_polarity = 1.0;
-            fullscale = 5.0;
-
+            ratedHV_V = 3000.0;
+            ratedI_mA = 10.0;
             break;
 
         case 3: // +20kV Bertan
-            hv_rated_V = 20000.0;
-            i_rated_mA = 1.0;
-            hv_polarity = 1.0;
-            fullscale = 5.0;
-
+            ratedHV_V = 20000.0;
+            ratedI_mA = 1.0;
             break;
     }
 
