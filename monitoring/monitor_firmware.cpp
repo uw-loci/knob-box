@@ -26,24 +26,24 @@ const int ps_id = 0;
 /**
  * System Constants
  */
-#define             RESET_THRESHOLD_V       0.3                 // V
-#define             RESET_THRESHOLD_I       0.3                 // mA
-#define             TX_BUF_SIZE             128
-#define             VOLTS_PER_COUNT         0.1875F / 1000.0F   // correct with GAIN_TWO_THIRDS
+#define RESET_THRESHOLD_V       0.3                 // V
+#define RESET_THRESHOLD_I       0.3                 // mA
+#define TX_BUF_SIZE             128
+#define VOLTS_PER_COUNT         0.1875F / 1000.0F   // correct with GAIN_TWO_THIRDS
 
 /**
  * Pin assignments
  */
-#define I_THRESH            A0      // Current Comparator threshold voltage
-#define V_THRESH            A1      // Voltage Comparator threshold voltage
-#define RESET_LED           6       // Yellow Matsusada Reset Indicator Light
-#define HV_ENABLE           7       // Active low
-#define ARM_BEAMS           11      // Active low
-#define CCS_POWER_ALLOW     12      // Active Low
-#define ARM_80KV            13      // Active low
-#define RS485_RX            19
-#define RS485_TX            18
-#define RS485_DIR           17      // low = receive mode
+#define I_THRESH                A0      // Current Comparator threshold voltage
+#define V_THRESH                A1      // Voltage Comparator threshold voltage
+#define RESET_LED               6       // Yellow Matsusada Reset Indicator Light
+#define HV_ENABLE               7       // Active low
+#define ARM_BEAMS               11      // Active low
+#define CCS_POWER_ALLOW         12      // Active Low
+#define ARM_80KV                13      // Active low
+#define RS485_RX                19
+#define RS485_TX                18
+#define RS485_DIR               17      // low = receive mode
 
 /**
  * Other declarations and initializations
@@ -51,14 +51,20 @@ const int ps_id = 0;
 float               ratedHV_V;              // "rated voltage" -- just the max output of the HVPSU
 float               ratedI_mA;              // same for "rated current"
 float               measuredI_mA;           // calculated values
-float               measuredHV_V;           // ...
-float               programmedHV_V;         // ...
+float               measuredHV_V;           // ""
+float               programmedHV_V;         // ""
 float               iPot_V;                 // potentiometer values
-float               vPot_V;                 // ...  
-float               vThresh_V;              // thresholds
-float               iThresh_mA;             // ...
+float               vPot_V;                 // ""  
+float               thresholdHV_V;          // thresholds
+float               tresholdI_mA;           // ""
 bool                resetState = false;     
 uint16_t            flags = 0;
+char                buffer[21];             // store formatted string to print to LCD
+char                programmedHV_buf[10];   // store current/voltage values for printing
+char                measuredHV_buf[10];     // ""    
+char                thresholdHV_buf[10];    // ""
+char                measuredI_buf[10];      // ""
+char                thresholdI_buf[10];     // ""
 static char         txBuf[TX_BUF_SIZE];
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
@@ -86,9 +92,9 @@ bool read_value()
     int16_t vsetRaw = ads.readADC_SingleEnded(CH_VSET);
 
     // Convert from raw ADC value to voltage between 0-5V.
-    float imonVolts = imonRaw * voltsPerCount; 
-    float vmonVolts = vmonRaw * voltsPerCount;
-    float vsetVolts = vsetRaw * voltsPerCount; 
+    float imonVolts = imonRaw * VOLTS_PER_COUNT; 
+    float vmonVolts = vmonRaw * VOLTS_PER_COUNT;
+    float vsetVolts = vsetRaw * VOLTS_PER_COUNT; 
 
     // Now Convert to full scale HV
     measuredI_mA = (imonVolts / 5.0) * ratedI_mA;
@@ -100,8 +106,8 @@ bool read_value()
     vPot_V = analogRead(V_THRESH) * (5.0 / 1023.0);
 
     // Convert potentiometer values to thresholds
-    vThresh_V = (vPot_V / 5.0) * ratedHV_V;
-    iThresh_mA = (iPot_V / 5.0) * ratedI_mA;
+    thresholdHV_V = (vPot_V / 5.0) * ratedHV_V;
+    thresholdI_mA = (iPot_V / 5.0) * ratedI_mA;
 
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
     the potentiometer set voltage is greater than a near zero threshold, but both the actual 
@@ -145,17 +151,13 @@ bool read_value()
     return true;
 }
 
-char buffer[21]; // buffer to store formatted string to print
-
 /* Display Measured Voltage, Current, Set Voltage, and Thresholds on LCD via I2C bus. */
 bool display_value()
 {
 
     // make current values printable -> convert from float to string
-    char measuredI_buf[10];
     dtostrf(measuredI_mA, 6, 3, measuredI_buf);
-    char iThresh_buf[10];
-    dtostrf(iThresh_mA, 3, 1, iThresh_buf);
+    dtostrf(thresholdI_mA, 3, 1, thresholdI_buf);
 
     switch(ps_id) {
         case 0: // -1kV Matsusada
@@ -171,7 +173,7 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", iThresh_buf, vThresh_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", thresholdI_buf, thresholdHV_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -190,7 +192,7 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", iThresh_buf, vThresh_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -209,7 +211,7 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", iThresh_buf, vThresh_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -218,12 +220,9 @@ bool display_value()
         case 3: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
-            char programmedHV_buf[10];
             dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
-            char measuredHV_buf[10];
             dtostrf((measuredHV_V / 1000.0), 5, 2, measuredHV_buf);
-            char vthresh_buf[10];
-            dtostrf((vThresh_V / 1000.0), 4, 1, vThresh_buf);
+            dtostrf((thresholdHV_V / 1000.0), 4, 1, thresholdHV_buf);
 
             snprintf(buffer, 21 * sizeof(char), "Set V:   +%skV  ", programmedHV_buf);
             lcd.setCursor(0,0);
@@ -237,7 +236,7 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", iThresh_buf, vThresh_buf);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", thresholdI_buf, thresholdHV_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -336,7 +335,7 @@ void setup()
     digitalWrite(RS485_DIR, LOW); // start in receive mode
     Serial1.begin(9600);
 
-    // Configure HVPSU specs, do some HVPSU-specific operations
+    // Configure HVPSU specs
     switch (ps_id) {
         case 0: // -1kV Matsusada
             ratedHV_V = 1000.0;
@@ -365,7 +364,6 @@ void setup()
     timer.every(150, read_value);
     timer.every(200, display_value);
     timer.every(1000*60*30, clear_display); // every 30 minutes
-    timer.every(500, transmit_data);
 
     wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 
@@ -374,5 +372,8 @@ void setup()
 void loop()
 {
   wdt_reset(); //Feed dog
+
+  // TODO: do rs-485 RX task
+
   timer.tick();
 }
