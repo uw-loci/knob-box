@@ -10,93 +10,66 @@
 
 #include <arduino-timer.h>
 #include <Wire.h>
-
-//Watch dog timer
 #include <avr/wdt.h>
-
 #include <LiquidCrystal_I2C.h>
-// Adafruit’s unified ADS1X15 library handles both ADS1015 and ADS1115
 #include <Adafruit_ADS1X15.h>
 
-Timer<4, millis> timer;
-
-// Create the ADS1115 object
-Adafruit_ADS1115 ads; 
-
-// 20x4 LCD Address is 0x27
-LiquidCrystal_I2C lcd(0x27, 20, 4);
-
-// Global ID tracking which arduino this is:
-//   0: -1kV
-//   1: +1kV
-//   2: +3kV
-//   3: +20kV
+/**
+ * GLOBAL MONITORING ARDUINO ID
+ *      - 0: -1kV Matsusada
+ *      - 1: +1kV Matsusada
+ *      - 2: +3kV Bertan
+ *      - 3: +20kV Bertan
+ */
 const int ps_id = 0;
 
-// Specs for specific power supply
-float ratedHV_V; // "rated voltage" really just the max output of the HVPSU
-float ratedI_mA;
+/**
+ * System Constants
+ */
+#define             RESET_THRESHOLD_V       0.3                 // V
+#define             RESET_THRESHOLD_I       0.3                 // mA
+#define             TX_BUF_SIZE             128
+#define             VOLTS_PER_COUNT         0.1875F / 1000.0F   // correct with GAIN_TWO_THIRDS
 
-/* External ADC Channel Assignment: 
-    A0 -> Current Monitoring 
-    A1 -> Voltage Monitoring
-    A2 -> Set Voltage */
+/**
+ * Pin assignments
+ */
+#define I_THRESH            A0      // Current Comparator threshold voltage
+#define V_THRESH            A1      // Voltage Comparator threshold voltage
+#define RESET_LED           6       // Yellow Matsusada Reset Indicator Light
+#define HV_ENABLE           7       // Active low
+#define ARM_BEAMS           11      // Active low
+#define CCS_POWER_ALLOW     12      // Active Low
+#define ARM_80KV            13      // Active low
+#define RS485_RX            19
+#define RS485_TX            18
+#define RS485_DIR           17      // low = receive mode
+
+/**
+ * Other declarations and initializations
+ */
+float               ratedHV_V;              // "rated voltage" -- just the max output of the HVPSU
+float               ratedI_mA;              // same for "rated current"
+float               measuredI_mA;           // calculated values
+float               measuredHV_V;           // ...
+float               programmedHV_V;         // ...
+float               iPot_V;                 // potentiometer values
+float               vPot_V;                 // ...  
+float               vThresh_V;              // thresholds
+float               iThresh_mA;             // ...
+bool                resetState = false;     
+uint16_t            flags = 0;
+static char         txBuf[TX_BUF_SIZE];
+Timer<4, millis>    timer;
+Adafruit_ADS1115    ads; 
+LiquidCrystal_I2C   lcd(0x27, 20, 4);
+
+/**
+ * External ADC channel assignments
+ */
 #define CH_IMON 0
 #define CH_VMON 1
 #define CH_VSET 2
-
-/* Calculated voltage, current values */
-float measuredI_mA;
-float measuredHV_V;
-float programmedHV_V;
-
-/* Internal ADC Channel Assignment:
-    A0 -> Current Comparator threshold voltage 
-    A1 -> Voltage Comparator threshold voltage */
-#define I_THRESH A0
-#define V_THRESH A1
-
-// Reset State Thresholds (change after testing matsusada reset)
-const float RESET_THRESHOLD_V = 0.3; // V
-const float RESET_THRESHOLD_I = 0.3; // mA
-
-/* Potentiometer Values */
-float iPot_V;
-float vPot_V;
-// calculated thresholds
-float vThresh_V;
-float iThresh_mA;
-
-/* Scaling Parameters */
-const float voltsPerCount = 0.1875F / 1000.0F;
-
-/* Yellow Matsusada Reset Indicator Light */
-#define RESET_LED 6
-bool resetState = false;
-
-/* HVPSU Enable Switch (active low) */
-#define HV_ENABLE 7
-
-/* Arm Beams Switch (active low) */
-#define ARM_BEAMS 11
-
-/* CCS Power Allow Switch (active low) */
-#define CCS_POWER_ALLOW 12
-
-/* Arm 80kV Switch (active low) */
-#define ARM_80KV 13
-
-/* RS-485 Pins */
-#define RS485_RX 19
-#define RS485_TX 18
-#define RS485_DIR 17 // low = receive mode
-
-/* RS-485 buffer */
-#define TX_BUF_SIZE 128
-static char txBuf[TX_BUF_SIZE];
-
-/* +3kV Flags from Logic Arduino (there are 13 flags) */
-uint16_t flags = 0;
 
 /**
  * Read and scale monitored voltage and current, set voltage, and potentiometer thresholds.
@@ -145,10 +118,11 @@ bool read_value()
         }
     }
 
+    /* Read Logic Arduino Flags */
     if (ps_id == 2) { // only for +3kV Bertan
-        // Logic Arduino flags
-        flags = 0;
 
+        // read flags
+        flags = 0;
         flags |= digitalRead(25) << 0;
         flags |= digitalRead(26) << 1;
         flags |= digitalRead(27) << 2;
@@ -162,6 +136,10 @@ bool read_value()
         flags |= digitalRead(35) << 10;
         flags |= digitalRead(36) << 11;
         flags |= digitalRead(37) << 12;
+
+        // ack read so logic arduino can reset and continue
+        bool inv = !digitalRead(FLAGS_ACK_PIN);
+        digitalWrite(FLAGS_ACK_PIN, inv);
     }
 
     return true;
