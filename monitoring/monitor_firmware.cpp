@@ -2,10 +2,11 @@
     - reset logic: does it work, does it need separate entry/exit thresholds
 
     - is ADS1115 scaling logic correct? will the ADC voltages read all be 0-5V?
-    
-    - RS485: implement master-slave behavior
 
     - do the flag pins need to be INPUT_PULLUP? 
+
+    - RS-485 Discrete Inputs:
+        interlock state, flags from logic arduino, and "overcurrent" not being sent currently
     */
 
 #include <arduino-timer.h>
@@ -13,22 +14,41 @@
 #include <avr/wdt.h>
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_ADS1X15.h>
+#include <ArduinoRS485.h>
+#include <ArduinoModbus.h>
+
+//============= MODBUS MAP =========================
+// Input Registers (Function Code 04)
+#define IREG_MODE_ADDR        = 1   // 1,2,3,4 same as ps_id 255 = error
+#define IREG_V_SET_ADDR       = 2   // integer volts
+#define IREG_V_READ_ADDR      = 3   // integer volts
+#define IREG_I_READ_ADDR      = 4   // integer microamps
+
+// Discrete Inputs (Function Code 02)
+#define DINPUT_HVENABLE_ADDR = 0
+#define DINPUT_ARMBEAMS_ADDR = 1
+#define DINPUT_CCSPOWER_ADDR = 2
+#define DINPUT_ARM80KV_ADDR = 3 
+
+// note: when changing this map, update these register counts:
+#define IREG_COUNT              4
+#define DINPUT_COUNT            4
+// =================================================
 
 /**
  * GLOBAL MONITORING ARDUINO ID
- *      - 0: -1kV Matsusada
- *      - 1: +1kV Matsusada
- *      - 2: +3kV Bertan
- *      - 3: +20kV Bertan
+ *      - 1: -1kV Matsusada
+ *      - 2: +1kV Matsusada
+ *      - 3: +3kV Bertan
+ *      - 4: +20kV Bertan
  */
-const int ps_id = 0;
+const int ps_id = 1;
 
 /**
  * System Constants
  */
 #define RESET_THRESHOLD_V       0.3                 // V
 #define RESET_THRESHOLD_I       0.3                 // mA
-#define TX_BUF_SIZE             128
 #define VOLTS_PER_COUNT         0.1875F / 1000.0F   // correct with GAIN_TWO_THIRDS
 
 /**
@@ -57,15 +77,14 @@ float               iPot_V;                 // potentiometer values
 float               vPot_V;                 // ""  
 float               thresholdHV_V;          // thresholds
 float               tresholdI_mA;           // ""
-bool                resetState = false;     
-uint16_t            flags = 0;
+bool                resetState = false;    
+uint16_t            flags = 0;              
 char                buffer[21];             // store formatted string to print to LCD
 char                programmedHV_buf[10];   // store current/voltage values for printing
 char                measuredHV_buf[10];     // ""    
 char                thresholdHV_buf[10];    // ""
 char                measuredI_buf[10];      // ""
 char                thresholdI_buf[10];     // ""
-static char         txBuf[TX_BUF_SIZE];
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
@@ -78,6 +97,16 @@ LiquidCrystal_I2C   lcd(0x27, 20, 4);
 #define CH_VSET 2
 
 /**
+ * Helper to round and clamp values before sending over RS-485.
+ */
+static inline uint16_t round_clamp_u16(float x)
+{
+    if (x < 0.0f) return 0;
+    if (x > 65535.0f) return 65535;
+    return (uint16_t)(x + 0.5f);
+}
+
+/**
  * Read and scale monitored voltage and current, set voltage, and potentiometer thresholds.
  * 
  * Perform Matsusada reset state logic.
@@ -86,33 +115,47 @@ LiquidCrystal_I2C   lcd(0x27, 20, 4);
  */
 bool read_value()
 {
-    
+    /*
+    Calculate the voltage and current values, then store them in RS-485 input regs.
+    */
     int16_t imonRaw = ads.readADC_SingleEnded(CH_IMON);
     int16_t vmonRaw = ads.readADC_SingleEnded(CH_VMON);
     int16_t vsetRaw = ads.readADC_SingleEnded(CH_VSET);
-
     // Convert from raw ADC value to voltage between 0-5V.
     float imonVolts = imonRaw * VOLTS_PER_COUNT; 
     float vmonVolts = vmonRaw * VOLTS_PER_COUNT;
     float vsetVolts = vsetRaw * VOLTS_PER_COUNT; 
-
-    // Now Convert to full scale HV
+    // Convert to full scale HV
     measuredI_mA = (imonVolts / 5.0) * ratedI_mA;
     measuredHV_V = (vmonVolts / 5.0) * ratedHV_V;
     programmedHV_V = (vsetVolts / 5.0) * ratedHV_V;
+    // Store in input regs, rounding to the nearest volt and the nearest uA
+    inputRegisterWrite(IREG_V_SET_ADDR, round_clamp_u16(programmedHV_V));
+    inputRegisterWrite(IREG_V_READ_ADDR, round_clamp_u16(measuredHV_V));
+    inputRegisterWrite(IREG_I_READ_ADDR, round_clamp_u16(measuredI_mA * 1000.0f));
 
-    // Get potentiometer values and convert to 0-5V.
+    /* 
+    Calculate voltage and current thresholds. 
+    */
     iPot_V = analogRead(I_THRESH) * (5.0 / 1023.0);
     vPot_V = analogRead(V_THRESH) * (5.0 / 1023.0);
-
-    // Convert potentiometer values to thresholds
+    // Convert pot values to fullscale thresholds
     thresholdHV_V = (vPot_V / 5.0) * ratedHV_V;
     thresholdI_mA = (iPot_V / 5.0) * ratedI_mA;
+
+    /*
+    Read switch states and store in RS-485 discrete inputs.
+    */
+    discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE) == LOW);
+    discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(ARM_BEAMS) == LOW);
+    discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(CCS_POWER_ALLOW) == LOW);
+    discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV) == LOW);
+
 
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
     the potentiometer set voltage is greater than a near zero threshold, but both the actual 
     current and actual voltage are at near zero values.*/
-    if (ps_id == 0 || ps_id == 1) { // Matsusadas
+    if (ps_id == 1 || ps_id == 2) { // Matsusadas
         if (resetState == false && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
             // reset state found
             digitalWrite(RESET_LED, HIGH);
@@ -125,7 +168,7 @@ bool read_value()
     }
 
     /* Read Logic Arduino Flags */
-    if (ps_id == 2) { // only for +3kV Bertan
+    if (ps_id == 3) { // only for +3kV Bertan
 
         // read flags
         flags = 0;
@@ -160,7 +203,7 @@ bool display_value()
     dtostrf(thresholdI_mA, 3, 1, thresholdI_buf);
 
     switch(ps_id) {
-        case 0: // -1kV Matsusada
+        case 1: // -1kV Matsusada
             snprintf(buffer, 21 * sizeof(char), "Set V:   -%4dV     ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
@@ -179,7 +222,7 @@ bool display_value()
 
             break;
         
-        case 1: // 1kV Matsusada
+        case 2: // 1kV Matsusada
             snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
@@ -198,7 +241,7 @@ bool display_value()
 
             break;
 
-        case 2: // +3kV Bertan
+        case 3: // +3kV Bertan
             snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
             lcd.setCursor(0,0);
             lcd.print(buffer);
@@ -217,7 +260,7 @@ bool display_value()
 
             break;
 
-        case 3: // +20kV Bertan
+        case 4: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
@@ -246,48 +289,6 @@ bool display_value()
     return true;
 }
 
-/**
- *  Send data to python dashboard.
- */
-bool transmit_data()
-{
-
-    // TODO implement master-slave behavior:
-    //   - this arduino should only TX data when called on by the dashboard
-
-    // Format voltage, current values to be scaled integers
-    uint32_t setVoltage_e4 = (uint32_t)(programmedHV_V * 10000.0f);
-    uint32_t actualVoltage_e4 = (uint32_t)(measuredHV_V * 10000.0f);
-    uint32_t actualCurrent_e4 = (uint32_t)(measuredI_mA * 10000.0f);
-
-    // Create a hex digit for statuses.
-    uint8_t switchStates = 
-        ((digitalRead(HV_ENABLE) == LOW ? 1 : 0) << 3) |
-        ((digitalRead(ARM_BEAMS) == LOW ? 1 : 0) << 2) | 
-        ((digitalRead(CCS_POWER_ALLOW) == LOW ? 1 : 0) << 1) |
-        ((digitalRead(ARM_80KV) == LOW ? 1 : 0));
-    switchStates = switchStates & 0x0F;
-
-    // Print components to buffer to be transmitted
-    snprintf(txBuf, TX_BUF_SIZE,
-        "%u;%u;%u;%x;%u",
-        setVoltage_e4,
-        actualVoltage_e4,
-        actualCurrent_e4,
-        switchStates,
-        flags);
-
-    // Send data string to python gui through Serial1
-    digitalWrite(RS485_DIR, HIGH);
-    delayMicroseconds(5);
-    Serial1.println(txBuf);
-    //Serial1.flush(); taken out due to watchdog reset concerns
-    delayMicroseconds(5);
-    digitalWrite(RS485_DIR, LOW);
-
-    return true;
-}
-
 bool clear_display() {
     lcd.clear();
     return true;
@@ -312,54 +313,59 @@ void setup()
     lcd.setCursor(0, 0);
 
     pinMode(HV_ENABLE, INPUT_PULLUP);
-    pinMode(ARM_BEAMS, INPUT_PULLUP);
-    pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
-    pinMode(ARM_80KV, INPUT_PULLUP);
-
-    // pins for logic arduino flags
-    pinMode(25, INPUT);
-    pinMode(26, INPUT);
-    pinMode(27, INPUT);
-    pinMode(28, INPUT);
-    pinMode(29, INPUT);
-    pinMode(30, INPUT);
-    pinMode(31, INPUT);
-    pinMode(32, INPUT);
-    pinMode(33, INPUT);
-    pinMode(34, INPUT);
-    pinMode(35, INPUT);
-    pinMode(36, INPUT);
-    pinMode(37, INPUT); 
-
-    pinMode(RS485_DIR, OUTPUT);
-    digitalWrite(RS485_DIR, LOW); // start in receive mode
-    Serial1.begin(9600);
 
     // Configure HVPSU specs
     switch (ps_id) {
-        case 0: // -1kV Matsusada
+        case 1: // -1kV Matsusada
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
             pinMode(RESET_LED, OUTPUT);
             break;
 
-        case 1: // +1kV Matsusada
+        case 2: // +1kV Matsusada
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
             pinMode(RESET_LED, OUTPUT);
             break;
 
-        case 2: // +3kV Bertan
+        case 3: // +3kV Bertan
             ratedHV_V = 3000.0;
             ratedI_mA = 10.0;
+
+            // pins for logic arduino flags
+            pinMode(25, INPUT);
+            pinMode(26, INPUT);
+            pinMode(27, INPUT);
+            pinMode(28, INPUT);
+            pinMode(29, INPUT);
+            pinMode(30, INPUT);
+            pinMode(31, INPUT);
+            pinMode(32, INPUT);
+            pinMode(33, INPUT);
+            pinMode(34, INPUT);
+            pinMode(35, INPUT);
+            pinMode(36, INPUT);
+            pinMode(37, INPUT); 
+            // switches only monitored by +3kV
+            pinMode(ARM_BEAMS, INPUT_PULLUP);
+            pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
+            pinMode(ARM_80KV, INPUT_PULLUP);
+
             break;
 
-        case 3: // +20kV Bertan
+        case 4: // +20kV Bertan
             ratedHV_V = 20000.0;
             ratedI_mA = 1.0;
             break;
     }
 
+    // Setup RS-485
+    RS485.setPins(RS485_TX, RS485_DIR, RS485_DIR); // DE and RE pins shorted together
+    RS485.begin(9600);
+    ModbusRTUServer.begin(ps_id, 9600); // address of slave lines up with ps_id
+    configureInputRegisters(0, IREG_COUNT);
+    configureDiscreteInputs(0, DINPUT_COUNT);
+    inputRegisterWrite(IREG_MODE_ADDR, (uint16_t)ps_id); // todo implement error mode
     
     timer.every(150, read_value);
     timer.every(200, display_value);
@@ -373,7 +379,7 @@ void loop()
 {
   wdt_reset(); //Feed dog
 
-  // TODO: do rs-485 RX task
+  ModbusRTUServer.poll(); // poll for requests from dashboard
 
   timer.tick();
 }
