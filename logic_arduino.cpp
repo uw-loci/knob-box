@@ -18,6 +18,7 @@
            * Arm 80kV switch asserted (D13)
            * 3kV enable switch asserted (D10)
            * ALL 8 comparators SAFE (all LOW)
+       - Enter Timer if 3kI trips
 
     2) NOM_OP
        - CCS enable  (A0): follows CCS allow switch (D12)
@@ -25,7 +26,7 @@
        - 3kV enable  (A2): follows 3kV enable switch (D10)
        - NomOp flag  (D25): HIGH
        - Exit to BI if any interlock tripped:
-           * any comparator goes FAULT (HIGH)  -> if 3kV V/I fault -> TIMER, else BI
+           * any comparator goes FAULT (HIGH)  -> if 3kV V/I trip -> TIMER, else BI
            * Arm 80kV switch deasserts
            * 3kV enable switch deasserts
 
@@ -41,7 +42,7 @@
         * D22-24 unused: held LOW
         * D25 NomOp flag: HIGH = In NOM OP  ->  LOW = not NOM OP
         * D26-29 lached debounced switches (D10-13 asserted=1) since last ACK toggle
-    - ACK toggle input (D14): any change clears latched comparator faults
+    - ACK toggle input (D14): any change clears latched interlock faults
 */
 
 #include <Arduino.h>
@@ -88,11 +89,10 @@ static constexpr uint8_t MASK_RESET_BTN = _BV(PJ0); // D15
 // creates a mask based off of debounce bits. Ex. 00011111 for 5
 static constexpr uint8_t MASK_DEBOUNCE = (uint8_t)((1u << DEBOUNCE_BITS) - 1u);
 
-// Comparator groups (FAULT bits, 1 = fault)
+// Comparator masks
 // PL0=D49 3kV I, PL1=D48 3kV V
 static constexpr uint8_t MASK_COMP_3KV      = (uint8_t)(_BV(PL0) | _BV(PL1));
 static constexpr uint8_t MASK_COMP_3KV_I    = _BV(PL0);
-static constexpr uint8_t MASK_COMP_NON_3KV  = (uint8_t)~MASK_COMP_3KV;
 
 // ===================== Runtime state globals  =====================
 
@@ -102,16 +102,24 @@ static uint8_t prevPORTH = 0;
 
 // Used to store the previous states of switches / button for debouncing
 static uint8_t switchHist[4] = {0,0,0,0};
+static bool    switchStable[4] = {false, false, false, false};
 static uint8_t resetButtonHist = 0;
+static bool    resetButtonStable = false;
 static bool    prevResetButtonDb = false;
 
 // ========================= Helpers =========================
-static inline bool debounce_update(uint8_t &hist, bool sample) {
-  hist = (uint8_t)((hist << 1) | (sample ? 1 : 0));           // shift bits left, put most recent sample bit in lsb
-  const uint8_t maskedHist = hist & MASK_DEBOUNCE;
-  if (maskedHist == 0) return false;                          // fully debounced 0 register
-  if (maskedHist == MASK_DEBOUNCE) return true;                        // fully debounced 1 register
-  return (maskedHist & (1u << (DEBOUNCE_BITS - 1))) != 0;     // returns the previously debounced state if not a full debounce
+
+static inline bool debounce_update(uint8_t &hist, bool sample, bool &stable) {
+  hist = (uint8_t)((hist << 1) | (sample ? 1u : 0u));         // shift bits left, put most recent sample bit in lsb
+  const uint8_t maskedHist = (uint8_t)(hist & MASK_DEBOUNCE);
+
+  if (maskedHist == 0) {                      // fully debounced 0 register
+    stable = false;
+  } else if (maskedHist == MASK_DEBOUNCE) {   // fully debounced 1 reguster
+    stable = true;
+  }
+  // Hold previous value;
+  return stable;
 }
 
 static inline uint8_t debounce_switches(uint8_t swAssertPB) {
@@ -120,10 +128,10 @@ static inline uint8_t debounce_switches(uint8_t swAssertPB) {
   const bool switchCCSAllow = (swAssertPB & _BV(PB6)) != 0; // D12
   const bool switch80kAllow = (swAssertPB & _BV(PB7)) != 0; // D13
 
-  const bool debounce3kEn = debounce_update(switchHist[0], switch3kEn);
-  const bool debounceArmBeams = debounce_update(switchHist[1], switchArmBeams);
-  const bool debounceCCSAllow = debounce_update(switchHist[2], switchCCSAllow);
-  const bool debounce80kAllow = debounce_update(switchHist[3], switch80kAllow);
+  const bool debounce3kEn     = debounce_update(switchHist[0], switch3kEn,     switchStable[0]);
+  const bool debounceArmBeams = debounce_update(switchHist[1], switchArmBeams, switchStable[1]);
+  const bool debounceCCSAllow = debounce_update(switchHist[2], switchCCSAllow, switchStable[2]);
+  const bool debounce80kAllow = debounce_update(switchHist[3], switch80kAllow, switchStable[3]);
 
   uint8_t out = 0;
   if (debounce3kEn)     out |= _BV(PB4);
@@ -134,7 +142,7 @@ static inline uint8_t debounce_switches(uint8_t swAssertPB) {
 }
 
 static inline bool debounce_reset_button(bool resetButtonAsserted) {
-  return debounce_update(resetButtonHist, resetButtonAsserted);
+  return debounce_update(resetButtonHist, resetButtonAsserted, resetButtonStable);
 }
 
 // ========================= Low-level IO (pullups always ON) =========================
@@ -147,9 +155,9 @@ static inline void io_init_registers() {
   DDRL  = 0x00;
   PORTL = 0xFF;
 
-  // ACK/RESET inputs: Port J - pullup on reset button
+  // ACK/RESET inputs: Port J - pullups on reset, ack
   DDRJ &= (uint8_t)~(MASK_ACK | MASK_RESET_BTN);
-  PORTJ |= MASK_RESET_BTN;
+  PORTJ |= (MASK_ACK | MASK_RESET_BTN);
 
   // Flags outputs: Port A and C
   DDRA = 0xFF;
@@ -186,26 +194,26 @@ static inline void sample_inputs(Sample &s) {
   s.resetAsserted       = (pinJ & MASK_RESET_BTN) == 0;
 }
 
-static inline void write_flags(const Sample* sample, bool nomOp)
+static inline void write_flags(const Sample& sample, bool nomOp)
 {
   // Latched event flags since last ACK toggle
   static uint8_t prevFlagsComparators = 0;  // PL0-PL7 comparator bits (1 = fault)
   static uint8_t prevFlagsSwitches    = 0;  // PB4-PB7 asserted bits (1 = asserted)
 
   // Track ACK level to detect toggle
-  static uint8_t prevAck = 0;
+  static bool prevAck = false;
 
   // Clear flags on ACK toggle
-  if (sample->ackLevel != prevAck) {
+  if (sample.ackLevel != prevAck) {
     prevFlagsComparators = 0;
     prevFlagsSwitches    = 0;
   }
 
-  prevAck = sample->ackLevel;
+  prevAck = sample.ackLevel;
 
   // Latch new interlock events
-  prevFlagsComparators |= sample->comparators;
-  prevFlagsSwitches |= (uint8_t)(sample->switchesAssertPortB & MASK_SWITCHES_PORTB);
+  prevFlagsComparators |= sample.comparators;
+  prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCHES_PORTB);
 
   // Build PORTA (D22-D29)
   // PA0-PA2 (D22-D24): unused -> LOW
@@ -283,13 +291,17 @@ static inline void step() {
   switch (currentState) {
     case State::STATE_INTERLOCK: {
 
-      // Check for 3kv overcurrent right away, if so, break and change output & flags
+      // Check for 3kv overcurrent right away, if so, change outputs and break
       if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
         currentState = State::STATE_3KV_TIMER;
         output3kEnable = false;
         timerEnterMs = millis();
         break;
       }
+
+      outputCCS  = false;
+      outputBeamAllow = false;
+      output3kEnable  = sw_3kv_enable;
 
       // Enter NomOp only on reset button edge and all comparators SAFE and 80k asserted and 3k asserted
       if (resetButtonEdge && (inputSnapshot.comparators == 0) && sw_arm_80kv && sw_3kv_enable) {
@@ -340,7 +352,7 @@ static inline void step() {
 
   // ---- Flags  ----
   const bool nomOp = (currentState == State::STATE_NOM_OP);
-  write_flags(&inputSnapshot, nomOp);
+  write_flags(inputSnapshot, nomOp);
 
   // ---- Drive outputs ----
   write_outputs(outputCCS, outputBeamAllow, output3kEnable, !nomOp);
@@ -365,7 +377,7 @@ void setup() {
   // Produce a initial flag image and set outputs
   Sample raw;
   sample_inputs(raw);
-  write_flags(&raw, false);
+  write_flags(raw, false);
 
   // Ensure outputs are in safe posture
   write_outputs(false, false, false, true);
