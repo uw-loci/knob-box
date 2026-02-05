@@ -138,6 +138,7 @@ static inline int16_t clamp_i16_positive(float x)
 {
     if (x < 0.0f) return 0;
     if (x > 32760.0f) return 32767;
+    else return (int16_t)x;
 }
 
 /**
