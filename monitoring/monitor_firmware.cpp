@@ -1,12 +1,8 @@
 /* TODOs:
     - reset logic: does it work, does it need separate entry/exit thresholds
 
-    - is ADS1115 scaling logic correct? will the ADC voltages read all be 0-5V?
-
-    - do the flag pins need to be INPUT_PULLUP? 
-
     - RS-485 Discrete Inputs:
-        interlock state, flags from logic arduino, and "overcurrent" not being sent currently
+        interlock state, "overcurrent" state? 
     */
 
 #include <arduino-timer.h>
@@ -17,23 +13,39 @@
 #include <ArduinoRS485.h>
 #include <ArduinoModbus.h>
 
-//============= MODBUS MAP =========================
+//============= MODBUS MAP ==================================
+//===========================================================
 // Input Registers (Function Code 04)
-#define IREG_MODE_ADDR        = 1   // 1,2,3,4 same as ps_id 255 = error
-#define IREG_V_SET_ADDR       = 2   // integer volts
-#define IREG_V_READ_ADDR      = 3   // integer volts
-#define IREG_I_READ_ADDR      = 4   // integer microamps
+#define IREG_HEALTH_ADDR        0   // TODO track health/error mode
+#define IREG_V_SET_ADDR         1   // integer volts
+#define IREG_V_READ_ADDR        2   // integer volts
+#define IREG_I_READ_ADDR        3   // integer microamps
 
 // Discrete Inputs (Function Code 02)
-#define DINPUT_HVENABLE_ADDR = 0
-#define DINPUT_ARMBEAMS_ADDR = 1
-#define DINPUT_CCSPOWER_ADDR = 2
-#define DINPUT_ARM80KV_ADDR = 3 
+#define DINPUT_HVENABLE_ADDR            0
+#define DINPUT_ARMBEAMS_ADDR            1
+#define DINPUT_CCSPOWER_ADDR            2
+#define DINPUT_ARM80KV_ADDR             3 
+// (flags)
+#define DINPUT_NOMOP_FLAG_ADDR          4
+#define DINPUT_3K_HVENABLE_FLAG_ADDR    5
+#define DINPUT_ARMBEAMS_FLAG_ADDR       6
+#define DINPUT_CCSPOWER_FLAG_ADDR       7
+#define DINPUT_ARM80KV_FLAG_ADDR        8
+#define DINPUT_1K_VCOMP_FLAG_ADDR       9
+#define DINPUT_1K_ICOMP_FLAG_ADDR       10
+#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   11
+#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   12
+#define DINPUT_20K_VCOMP_FLAG_ADDR      13
+#define DINPUT_20K_ICOMP_FLAG_ADDR      14
+#define DINPUT_3K_VCOMP_FLAG_ADDR       15
+#define DINPUT_3K_ICOMP_FLAG_ADDR       16
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              4
-#define DINPUT_COUNT            4
-// =================================================
+#define DINPUT_COUNT            17
+//============================================================
+//============================================================
 
 /**
  * GLOBAL MONITORING ARDUINO ID
@@ -64,6 +76,21 @@ const int ps_id = 1;
 #define RS485_RX                19
 #define RS485_TX                18
 #define RS485_DIR               17      // low = receive mode
+#define FLAGS_ACK_PIN           14      // ack pin to Logic Arduino
+// (flags)
+#define FLAG_NOMOP              25
+#define FLAG_3K_HVENABLE        26
+#define FLAG_ARMBEAMS           27
+#define FLAG_CCSPOWER           28
+#define FLAG_ARM80KV            29
+#define FLAG_1K_VCOMP           30
+#define FLAG_1K_ICOMP           31
+#define FLAG_NEG_1K_VCOMP       32
+#define FLAG_NEG_1K_ICOMP       33
+#define FLAG_20K_VCOMP          34
+#define FLAG_20K_ICOMP          35
+#define FLAG_3K_VCOMP           36
+#define FLAG_3K_ICOMP           37
 
 /**
  * Other declarations and initializations
@@ -76,9 +103,10 @@ float               programmedHV_V;         // ""
 float               iPot_V;                 // potentiometer values
 float               vPot_V;                 // ""  
 float               thresholdHV_V;          // thresholds
-float               tresholdI_mA;           // ""
+float               thresholdI_mA;           // ""
 bool                resetState = false;    
 uint16_t            flags = 0;              
+bool                ack_state = false;      // false = HI-Z, true = LOW
 char                buffer[21];             // store formatted string to print to LCD
 char                programmedHV_buf[10];   // store current/voltage values for printing
 char                measuredHV_buf[10];     // ""    
@@ -106,6 +134,12 @@ static inline uint16_t round_clamp_u16(float x)
     return (uint16_t)(x + 0.5f);
 }
 
+static inline int16_t clamp_i16_positive(float x)
+{
+    if (x < 0.0f) return 0;
+    if (x > 32760.0f) return 32767;
+}
+
 /**
  * Read and scale monitored voltage and current, set voltage, and potentiometer thresholds.
  * 
@@ -121,18 +155,22 @@ bool read_value()
     int16_t imonRaw = ads.readADC_SingleEnded(CH_IMON);
     int16_t vmonRaw = ads.readADC_SingleEnded(CH_VMON);
     int16_t vsetRaw = ads.readADC_SingleEnded(CH_VSET);
-    // Convert from raw ADC value to voltage between 0-5V.
+    // Clamp raw readings to be in [0, 32760]
+    imonRaw = clamp_i16_positive(imonRaw);
+    vmonRaw = clamp_i16_positive(vmonRaw);
+    vsetRaw = clamp_i16_positive(vsetRaw);
+    // Convert from raw ADC counts to volts using ±6.144 V full-scale.
     float imonVolts = imonRaw * VOLTS_PER_COUNT; 
     float vmonVolts = vmonRaw * VOLTS_PER_COUNT;
     float vsetVolts = vsetRaw * VOLTS_PER_COUNT; 
-    // Convert to full scale HV
+    // Convert to full scale HV (assumed 0-5V input range to ADC)
     measuredI_mA = (imonVolts / 5.0) * ratedI_mA;
     measuredHV_V = (vmonVolts / 5.0) * ratedHV_V;
     programmedHV_V = (vsetVolts / 5.0) * ratedHV_V;
     // Store in input regs, rounding to the nearest volt and the nearest uA
-    inputRegisterWrite(IREG_V_SET_ADDR, round_clamp_u16(programmedHV_V));
-    inputRegisterWrite(IREG_V_READ_ADDR, round_clamp_u16(measuredHV_V));
-    inputRegisterWrite(IREG_I_READ_ADDR, round_clamp_u16(measuredI_mA * 1000.0f));
+    ModbusRTUServer.inputRegisterWrite(IREG_V_SET_ADDR, round_clamp_u16(programmedHV_V));
+    ModbusRTUServer.inputRegisterWrite(IREG_V_READ_ADDR, round_clamp_u16(measuredHV_V));
+    ModbusRTUServer.inputRegisterWrite(IREG_I_READ_ADDR, round_clamp_u16(measuredI_mA * 1000.0f));
 
     /* 
     Calculate voltage and current thresholds. 
@@ -146,11 +184,10 @@ bool read_value()
     /*
     Read switch states and store in RS-485 discrete inputs.
     */
-    discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE) == LOW);
-    discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(ARM_BEAMS) == LOW);
-    discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(CCS_POWER_ALLOW) == LOW);
-    discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV) == LOW);
-
+    ModbusRTUServer.discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE) == LOW);
+    ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(ARM_BEAMS) == LOW);
+    ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(CCS_POWER_ALLOW) == LOW);
+    ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV) == LOW);
 
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
     the potentiometer set voltage is greater than a near zero threshold, but both the actual 
@@ -170,25 +207,30 @@ bool read_value()
     /* Read Logic Arduino Flags */
     if (ps_id == 3) { // only for +3kV Bertan
 
-        // read flags
-        flags = 0;
-        flags |= digitalRead(25) << 0;
-        flags |= digitalRead(26) << 1;
-        flags |= digitalRead(27) << 2;
-        flags |= digitalRead(28) << 3;
-        flags |= digitalRead(29) << 4;
-        flags |= digitalRead(30) << 5;
-        flags |= digitalRead(31) << 6;
-        flags |= digitalRead(32) << 7;
-        flags |= digitalRead(33) << 8;
-        flags |= digitalRead(34) << 9;
-        flags |= digitalRead(35) << 10;
-        flags |= digitalRead(36) << 11;
-        flags |= digitalRead(37) << 12;
+        // read flags into RS-485 discrete inputs
+        ModbusRTUServer.discreteInputWrite(DINPUT_NOMOP_FLAG_ADDR, digitalRead(FLAG_NOMOP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_3K_HVENABLE_FLAG_ADDR, digitalRead(FLAG_3K_HVENABLE));
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_FLAG_ADDR, digitalRead(FLAG_ARMBEAMS));
+        ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_FLAG_ADDR, digitalRead(FLAG_CCSPOWER));
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_FLAG_ADDR, digitalRead(FLAG_ARM80KV));
+        ModbusRTUServer.discreteInputWrite(DINPUT_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_1K_VCOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_1K_ICOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_VCOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_ICOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_20K_VCOMP_FLAG_ADDR, digitalRead(FLAG_20K_VCOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_20K_ICOMP_FLAG_ADDR, digitalRead(FLAG_20K_ICOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_3K_VCOMP_FLAG_ADDR, digitalRead(FLAG_3K_VCOMP));
+        ModbusRTUServer.discreteInputWrite(DINPUT_3K_ICOMP_FLAG_ADDR, digitalRead(FLAG_3K_ICOMP));
 
         // ack read so logic arduino can reset and continue
-        bool inv = !digitalRead(FLAGS_ACK_PIN);
-        digitalWrite(FLAGS_ACK_PIN, inv);
+        if (ack_state == false) {
+            pinMode(FLAGS_ACK_PIN, OUTPUT);
+            digitalWrite(FLAGS_ACK_PIN, LOW);
+            ack_state = true;
+        } else {
+            pinMode(FLAGS_ACK_PIN, INPUT); // high impedance
+            ack_state = false;
+        }
     }
 
     return true;
@@ -346,6 +388,7 @@ void setup()
             pinMode(35, INPUT);
             pinMode(36, INPUT);
             pinMode(37, INPUT); 
+            pinMode(FLAGS_ACK_PIN, INPUT);
             // switches only monitored by +3kV
             pinMode(ARM_BEAMS, INPUT_PULLUP);
             pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
@@ -363,10 +406,10 @@ void setup()
     RS485.setPins(RS485_TX, RS485_DIR, RS485_DIR); // DE and RE pins shorted together
     RS485.begin(9600);
     ModbusRTUServer.begin(ps_id, 9600); // address of slave lines up with ps_id
-    configureInputRegisters(0, IREG_COUNT);
-    configureDiscreteInputs(0, DINPUT_COUNT);
-    inputRegisterWrite(IREG_MODE_ADDR, (uint16_t)ps_id); // todo implement error mode
-    
+    ModbusRTUServer.configureInputRegisters(0, IREG_COUNT);
+    ModbusRTUServer.configureDiscreteInputs(0, DINPUT_COUNT);
+    ModbusRTUServer.inputRegisterWrite(IREG_HEALTH_ADDR, (uint16_t)ps_id); // TODO
+
     timer.every(150, read_value);
     timer.every(200, display_value);
     timer.every(1000*60*30, clear_display); // every 30 minutes
