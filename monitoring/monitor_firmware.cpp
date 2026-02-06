@@ -345,7 +345,10 @@ void setup()
 
     // Initialize the ADS1115 and I2C bus
     Wire.begin();
-    ads.begin();
+    if (!ads.begin()) {
+        Serial.println("Failed to initialize ADS.");
+        // while (1);
+    }
     ads.setDataRate(RATE_ADS1115_860SPS);
     ads.setGain(GAIN_TWOTHIRDS); // deafult, but want to be sure
 
@@ -406,7 +409,10 @@ void setup()
     // Setup RS-485
     RS485.setPins(RS485_TX, RS485_DIR, RS485_DIR); // DE and RE pins shorted together
     RS485.begin(9600);
-    ModbusRTUServer.begin(ps_id, 9600); // address of slave lines up with ps_id
+    if (!ModbusRTUServer.begin(ps_id, 9600)) { // address of slave lines up with ps_id
+        Serial.println("Failed to start Modbus RTU Server");
+        // while (1);
+    }
     ModbusRTUServer.configureInputRegisters(0, IREG_COUNT);
     ModbusRTUServer.configureDiscreteInputs(0, DINPUT_COUNT);
     ModbusRTUServer.inputRegisterWrite(IREG_HEALTH_ADDR, (uint16_t)ps_id); // TODO
