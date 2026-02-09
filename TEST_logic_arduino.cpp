@@ -25,6 +25,11 @@
     CCS Power Allow Switch       D12 -> Flag D28 (PA6)
     Arm 80kV Switch              D13 -> Flag D29 (PA7)
 
+  Output mirror flags (CURRENT, not latched):
+    CCS Power Enable (A0)        N/A -> Flag D22 (PA0)
+    Beam Enable (A1)             N/A -> Flag D23 (PA1)
+    3kV HV Enable (A2)           N/A -> Flag D24 (PA2)
+
   NomOp flag:
     Nom Op (state flag)          N/A -> Flag D25 (PA3)
 
@@ -207,9 +212,9 @@ static void printObserveDetailed(const Observe& o) {
   Serial.print(F("  PORTC (D30..D37)=0x")); Serial.println(o.portc, HEX);
 
   Serial.println(F("\nPORTA / D22..D29 (Flags):"));
-  Serial.print(F("  D22 (PA0 bit0): ")); Serial.println((o.porta & (1u<<0)) ? F("1") : F("0"));
-  Serial.print(F("  D23 (PA1 bit1): ")); Serial.println((o.porta & (1u<<1)) ? F("1") : F("0"));
-  Serial.print(F("  D24 (PA2 bit2): ")); Serial.println((o.porta & (1u<<2)) ? F("1") : F("0"));
+  Serial.print(F("  D22 (PA0 bit0): A0 mirror (CCS Enable) = ")); Serial.println((o.porta & (1u<<0)) ? F("1") : F("0"));
+  Serial.print(F("  D23 (PA1 bit1): A1 mirror (Beam Enable) = ")); Serial.println((o.porta & (1u<<1)) ? F("1") : F("0"));
+  Serial.print(F("  D24 (PA2 bit2): A2 mirror (3kV Enable) = ")); Serial.println((o.porta & (1u<<2)) ? F("1") : F("0"));
   Serial.print(F("  D25 (PA3 bit3): Nom Op flag = "));
   Serial.println((o.porta & (1u<<3)) ? F("1 (NOM_OP)") : F("0 (INTERLOCK/TIMER)"));
 
@@ -402,6 +407,30 @@ static void beginCase(uint16_t tc, const __FlashStringHelper* name) {
 }
 
 // ========================= Expectations / Check helpers =========================
+
+static bool expectOutputMirrorFlags(bool a0, bool a1, bool a2, uint16_t settleMs = DEFAULT_SETTLE_MS) {
+  settle(settleMs);
+  Observe o = observeLogic();
+
+  const uint8_t want = (uint8_t)((a0<<0) | (a1<<1) | (a2<<2));
+  const uint8_t got  = (uint8_t)(o.porta & 0x07);
+
+  logPush(LOG_CHECK, TAG4('F','O','U','0'), want, got, o.porta);
+
+  if (got != want) {
+    logPush(LOG_FAIL, TAG4('F','O','U','F'), want, got, o.porta);
+    Serial.print(F("FAIL: Output-mirror flags mismatch (D22..D24). Want 0b"));
+    Serial.print(want, BIN);
+    Serial.print(F(" got 0b"));
+    Serial.println(got, BIN);
+    printObserveDetailed(o);
+    return false;
+  }
+
+  logPush(LOG_PASS, TAG4('F','O','U','P'), want, got, o.porta);
+  return true;
+}
+
 static bool expectNomOp(bool wantNomOp, uint16_t settleMs = DEFAULT_SETTLE_MS) {
   settle(settleMs);
   Observe o = observeLogic();
@@ -424,20 +453,37 @@ static bool expectOutputs(bool a0, bool a1, bool a2, bool led, uint16_t settleMs
   settle(settleMs);
   Observe o = observeLogic();
 
-  const bool ok = (o.outA0==a0) && (o.outA1==a1) && (o.outA2==a2) && (o.led==led);
-  const uint8_t want = (uint8_t)((a0<<0)|(a1<<1)|(a2<<2)|(led<<3));
-  const uint8_t got  = (uint8_t)((o.outA0<<0)|(o.outA1<<1)|(o.outA2<<2)|(o.led<<3));
+  const bool okOut = (o.outA0==a0) && (o.outA1==a1) && (o.outA2==a2) && (o.led==led);
+  const uint8_t wantOut = (uint8_t)((a0<<0)|(a1<<1)|(a2<<2)|(led<<3));
+  const uint8_t gotOut  = (uint8_t)((o.outA0<<0)|(o.outA1<<1)|(o.outA2<<2)|(o.led<<3));
 
-  logPush(LOG_CHECK, TAG4('O','U','T','0'), want, got, (uint16_t)((o.porta<<8) | o.portc));
+  // Output-mirror flags are CURRENT state (NOT latched)
+  const uint8_t wantFlags = (uint8_t)((a0<<0)|(a1<<1)|(a2<<2));
+  const uint8_t gotFlags  = (uint8_t)(o.porta & 0x07);
+  const bool okFlags = (wantFlags == gotFlags);
 
-  if (!ok) {
-    logPush(LOG_FAIL, TAG4('O','U','T','F'), want, got, (uint16_t)((o.porta<<8) | o.portc));
-    Serial.println(F("FAIL: Output mismatch"));
+  logPush(LOG_CHECK, TAG4('O','U','T','0'), wantOut, gotOut, (uint16_t)((o.porta<<8) | o.portc));
+  logPush(LOG_CHECK, TAG4('F','O','U','0'), wantFlags, gotFlags, o.porta);
+
+  if (!okOut || !okFlags) {
+    if (!okOut)   logPush(LOG_FAIL, TAG4('O','U','T','F'), wantOut, gotOut, (uint16_t)((o.porta<<8) | o.portc));
+    if (!okFlags) logPush(LOG_FAIL, TAG4('F','O','U','F'), wantFlags, gotFlags, o.porta);
+
+    Serial.println(F("FAIL: Output and/or output-mirror flag mismatch"));
+    if (!okOut) {
+      Serial.print(F("  Outputs want 0b")); Serial.print(wantOut, BIN);
+      Serial.print(F(" got 0b")); Serial.println(gotOut, BIN);
+    }
+    if (!okFlags) {
+      Serial.print(F("  Flags D22..D24 want 0b")); Serial.print(wantFlags, BIN);
+      Serial.print(F(" got 0b")); Serial.println(gotFlags, BIN);
+    }
     printObserveDetailed(o);
     return false;
   }
 
-  logPush(LOG_PASS, TAG4('O','U','T','P'), want, got, (uint16_t)((o.porta<<8) | o.portc));
+  logPush(LOG_PASS, TAG4('O','U','T','P'), wantOut, gotOut, (uint16_t)((o.porta<<8) | o.portc));
+  logPush(LOG_PASS, TAG4('F','O','U','P'), wantFlags, gotFlags, o.porta);
   return true;
 }
 
@@ -808,6 +854,81 @@ static void testSuiteGlitchesInformational() {
   suiteStart();
 }
 
+
+static void testSuiteOutputMirrorFlags() {
+  beginSuite(900, F("OUTPUT MIRROR FLAGS (D22..D24) ARE CURRENT, NOT LATCHED"));
+  suiteStart();
+
+  beginCase(901, F("Baseline INTERLOCK: outputs OFF, LED ON; mirror flags 000"));
+  if (!expectNomOp(false)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+
+  beginCase(902, F("INTERLOCK: sw3kv ON -> A2 ON; mirror flags track immediately"));
+  swOn(P.sw3kv);
+  if (!expectNomOp(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+
+  beginCase(903, F("ACK toggle must NOT clear output mirror flags (still tracks current outputs)"));
+  ackEdge();
+  if (!expectOutputs(false,false,true,true)) return;
+
+  beginCase(904, F("Enter NOM_OP, then toggle A0/A1 via switches; mirror flags track current (not latched)"));
+  swOn(P.sw80kv);
+  resetPulseNomOp();
+  if (!expectNomOp(true)) return;
+  if (!expectOutputs(false,false,true,false)) return;
+
+  swOn(P.swCCS);
+  if (!expectOutputs(true,false,true,false)) return;
+  swOff(P.swCCS);
+  if (!expectOutputs(false,false,true,false)) return;
+
+  swOn(P.swBeams);
+  if (!expectOutputs(false,true,true,false)) return;
+  swOff(P.swBeams);
+  if (!expectOutputs(false,false,true,false)) return;
+
+  beginCase(905, F("Mirror flags are NOT latched: rapid A0 toggles must always reflect CURRENT state"));
+  for (uint8_t i = 0; i < 4; i++) {
+    swOn(P.swCCS);  if (!expectOutputs(true,false,true,false, 2)) return;
+    swOff(P.swCCS); if (!expectOutputs(false,false,true,false, 2)) return;
+  }
+
+  beginCase(906, F("Exit NOM_OP via non-3kV comparator fault: outputs go safe and mirror flags MUST drop even though latches may stay set"));
+  // Turn on A0 and A1 first
+  swOn(P.swCCS);
+  swOn(P.swBeams);
+  if (!expectOutputs(true,true,true,false)) return;
+
+  // Trip a non-3k comparator (idx 0) -> should return to INTERLOCK (not timer)
+  compFault(0);
+  delay(2);
+  compSafe(0);
+
+  // Expect INTERLOCK now: A0/A1 OFF, A2 follows sw3kv (still ON), LED ON
+  if (!expectNomOp(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+
+  beginCase(907, F("3kV I timer state: A2 forced OFF and mirror flags reflect OFF, then recover to follow sw3kv"));
+  // Ensure sw3kv is ON and we are in interlock
+  swOn(P.sw3kv);
+  swOff(P.sw80kv);
+  if (!expectNomOp(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+
+  compFault(COMP_IDX_3KV_I);
+  delay(2);
+  compSafe(COMP_IDX_3KV_I);
+
+  // Timer entry should force A2 OFF
+  if (!expectOutputs(false,false,false,true)) return;
+
+  delay(LOGIC_TIMER_3KV_MS + 10);
+  // Back to INTERLOCK, A2 follows sw3kv = ON
+  if (!expectOutputs(false,false,true,true)) return;
+}
+
+
 static void runAllAutoTests() {
   autoRunning = true;
   gTestCase = 0;
@@ -821,6 +942,7 @@ static void runAllAutoTests() {
   testSuite3kVSpecific();
   testSuiteNomOpEntryBlockedCases();
   testSuiteGlitchesInformational();
+  testSuiteOutputMirrorFlags();
 
   autoRunning = false;
   Serial.println(F("\n=== Auto tests complete ==="));
@@ -846,9 +968,9 @@ static void printHelp() {
 static void printMap() {
   Serial.println(F("\n--- MAP (Logic inputs -> Logic flags) ---"));
   Serial.println(F("PORTA / D22..D29:"));
-  Serial.println(F("  D22 (PA0 bit0): unused (kept low by logic)"));
-  Serial.println(F("  D23 (PA1 bit1): unused (kept low by logic)"));
-  Serial.println(F("  D24 (PA2 bit2): unused (kept low by logic)"));
+  Serial.println(F("  D22 (PA0 bit0): A0 mirror (CCS Power Enable output)"));
+  Serial.println(F("  D23 (PA1 bit1): A1 mirror (Beam Enable output)"));
+  Serial.println(F("  D24 (PA2 bit2): A2 mirror (3kV Enable output)"));
   Serial.println(F("  D25 (PA3 bit3): Nom Op flag"));
   for (uint8_t i = 0; i < 4; i++) {
     Serial.print(F("  D")); Serial.print(SWITCHES[i].flagPin);
