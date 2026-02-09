@@ -39,7 +39,7 @@
   Flags:
     - PORTC (D30-D37): latched comparator FAULTS (HIGH=FAULT) since last ACK toggle
     - PORTA (D22-D29):
-        * D22-24 unused: held LOW
+        * D22-24: reflect state of outputs A0-A2 respectively
         * D25 NomOp flag: HIGH = In NOM OP  ->  LOW = not NOM OP
         * D26-29 lached debounced switches (D10-13 asserted=1) since last ACK toggle
     - ACK toggle input (D14): any change clears latched interlock faults
@@ -49,10 +49,11 @@
 #include <avr/io.h>
 
 struct Sample; // redundant but arduino does cpp weird, and it freaks out if this forward dec isnt here
+struct Output;
 
 // ========================= Constants =========================
 static constexpr uint32_t TIMER_3KV_MS   = 100;
-static constexpr uint8_t  DEBOUNCE_BITS = 4;
+static constexpr uint8_t  DEBOUNCE_BITS = 6;    // Can be set from 1 to 8
 
 // ========================= Port mapping =========================
 // Switches D10-13 => PB4-PB7
@@ -73,8 +74,11 @@ static State currentState = State::STATE_INTERLOCK;
 
 // ========================= Masks =========================
 static constexpr uint8_t MASK_SWITCHES_PORTB = _BV(PB4) | _BV(PB5) | _BV(PB6) | _BV(PB7);
-static constexpr uint8_t MASK_SWITCHES_INTERLOCKS = _BV(PB4) | _BV(PB7);  // 80kv en and 3kv en
+static constexpr uint8_t MASK_PA_CCS    = _BV(PA0);
+static constexpr uint8_t MASK_PA_BEAMS  = _BV(PA1);
+static constexpr uint8_t MASK_PA_3KVEN  = _BV(PA2);
 static constexpr uint8_t MASK_PA_NOMOP  = _BV(PA3);
+
 
 // Outputs
 static constexpr uint8_t MASK_OUT_CCS   = _BV(PF0); // A0
@@ -171,7 +175,7 @@ static inline void io_init_registers() {
   PORTF &= (uint8_t)~(MASK_OUT_CCS | MASK_OUT_BEAM | MASK_OUT_3KV); // OFF
   PORTH |= MASK_INTERLOCK_LED;                                      // ON
 
-  // Flags default: D22-24 unused, keep LOW
+  // Flags default:
   PORTA = 0x00;
   PORTC = 0x00;
 }
@@ -181,6 +185,13 @@ struct Sample {
   uint8_t comparators;           // PL0-PL7: 1 means FAULT (HIGH)
   bool ackLevel;                 // Flag Ack
   bool resetAsserted;            // 1 means button asserted (PUSHED)
+};
+
+struct Output {
+  bool ccsPowerEnable;
+  bool armBeamsEnable;
+  bool enable3kV;
+  bool nomOp;
 };
 
 static inline void sample_inputs(Sample &s) {
@@ -194,7 +205,7 @@ static inline void sample_inputs(Sample &s) {
   s.resetAsserted       = (pinJ & MASK_RESET_BTN) == 0;
 }
 
-static inline void write_flags(const Sample& sample, bool nomOp)
+static inline void write_flags(const Sample& sample, const Output& out)
 {
   // Latched event flags since last ACK toggle
   static uint8_t prevFlagsComparators = 0;  // PL0-PL7 comparator bits (1 = fault)
@@ -216,11 +227,14 @@ static inline void write_flags(const Sample& sample, bool nomOp)
   prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCHES_PORTB);
 
   // Build PORTA (D22-D29)
-  // PA0-PA2 (D22-D24): unused -> LOW
+  // PA0-PA2 (D22-D24): reflect outputs A0, A1, A2
   // PA3     (D25): NomOp flag
   // PA4-PA7 (D26-D29): latched switch flags
   uint8_t porta = 0x00;
-  if (nomOp) porta |= MASK_PA_NOMOP;
+  porta |= out.ccsPowerEnable ? MASK_PA_CCS   : 0;
+  porta |= out.armBeamsEnable ? MASK_PA_BEAMS : 0;
+  porta |= out.enable3kV      ? MASK_PA_3KVEN : 0;
+  porta |= out.nomOp          ? MASK_PA_NOMOP : 0;
   porta |= (uint8_t)(prevFlagsSwitches & MASK_SWITCHES_PORTB);
 
   // write flags
@@ -229,26 +243,28 @@ static inline void write_flags(const Sample& sample, bool nomOp)
 }
 
 
-
-static inline void write_outputs(bool ccsEn, bool beamEn, bool En3kV, bool ledOn) {
+static inline void write_outputs(const Output& out) {
 
   uint8_t porth = prevPORTH;
   uint8_t portf = prevPORTF & ~(MASK_OUT_CCS | MASK_OUT_BEAM | MASK_OUT_3KV);   // clears CCS, ARM BEAMS, and 3kV EN bits, keeps all others
 
-  portf |= (ccsEn  ? MASK_OUT_CCS  : 0);    
-  portf |= (beamEn ? MASK_OUT_BEAM : 0);
-  portf |= (En3kV  ? MASK_OUT_3KV  : 0);
 
+  portf |= out.ccsPowerEnable ? MASK_OUT_CCS  : 0;
+  portf |= out.armBeamsEnable ? MASK_OUT_BEAM : 0;
+  portf |= out.enable3kV      ? MASK_OUT_3KV  : 0;
 
   // LED active-high
-  if (ledOn)  porth |= MASK_INTERLOCK_LED; else porth &= (uint8_t)~MASK_INTERLOCK_LED;
+  if (out.nomOp) {
+    porth &= (uint8_t)~MASK_INTERLOCK_LED;
+  } else {
+    porth |= MASK_INTERLOCK_LED;
+  }
 
   // write if there were changes
   if (portf != prevPORTF) { 
     PORTF = portf; 
     prevPORTF = portf; 
   }
-
   if (porth != prevPORTH) {
      PORTH = porth; 
      prevPORTH = porth; 
@@ -278,14 +294,12 @@ static inline void step() {
 
   // Switch states (debounced, asserted=1)
   const bool sw_3kv_enable = (switchesDebounced & _BV(PB4)) != 0; // D10
-  const bool sw_arm_beams  = (switchesDebounced & _BV(PB5)) != 0; // D11  //TODO restructure into outputs struct?
+  const bool sw_arm_beams  = (switchesDebounced & _BV(PB5)) != 0; // D11
   const bool sw_ccs_allow  = (switchesDebounced & _BV(PB6)) != 0; // D12
   const bool sw_arm_80kv   = (switchesDebounced & _BV(PB7)) != 0; // D13
 
-  // outputs
-  bool outputCCS  = false;
-  bool outputBeamAllow = false;
-  bool output3kEnable  = false;
+  // Outputs, all off by default
+  Output outputSnapshot = {false, false, false, false};
 
   // ---- State machine ----
   switch (currentState) {
@@ -294,14 +308,14 @@ static inline void step() {
       // Check for 3kv overcurrent right away, if so, change outputs and break
       if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
         currentState = State::STATE_3KV_TIMER;
-        output3kEnable = false;
+        outputSnapshot.enable3kV = false;
         timerEnterMs = millis();
         break;
       }
 
-      outputCCS  = false;
-      outputBeamAllow = false;
-      output3kEnable  = sw_3kv_enable;
+      outputSnapshot.ccsPowerEnable  = false;
+      outputSnapshot.armBeamsEnable = false;
+      outputSnapshot.enable3kV  = sw_3kv_enable;
 
       // Enter NomOp only on reset button edge and all comparators SAFE and 80k asserted and 3k asserted
       if (resetButtonEdge && (inputSnapshot.comparators == 0) && sw_arm_80kv && sw_3kv_enable) {
@@ -315,9 +329,9 @@ static inline void step() {
       // Check for 3kv right away, if so, break and change output & flags
       if (inputSnapshot.comparators & MASK_COMP_3KV) {
         currentState = State::STATE_3KV_TIMER;
-        outputCCS  = false;
-        outputBeamAllow = false;
-        output3kEnable  = false;
+        outputSnapshot.ccsPowerEnable  = false;
+        outputSnapshot.armBeamsEnable = false;
+        outputSnapshot.enable3kV  = false;
         timerEnterMs = millis();
         break;
       }
@@ -325,24 +339,24 @@ static inline void step() {
       // If required interlock switches drop, or any other comparators trip return to BI
       if ((inputSnapshot.comparators != 0) ||!sw_arm_80kv || !sw_3kv_enable) {
         currentState = State::STATE_INTERLOCK;
-        outputCCS  = false;
-        outputBeamAllow = false;
-        output3kEnable  = sw_3kv_enable;
+        outputSnapshot.ccsPowerEnable  = false;
+        outputSnapshot.armBeamsEnable = false;
+        outputSnapshot.enable3kV  = sw_3kv_enable;
         break;
       }
 
       // NomOp: normal outputs follow their own switches
-      output3kEnable  = sw_3kv_enable;
-      outputCCS  = sw_ccs_allow;
-      outputBeamAllow = sw_arm_beams;
+      outputSnapshot.enable3kV  = sw_3kv_enable;
+      outputSnapshot.ccsPowerEnable  = sw_ccs_allow;
+      outputSnapshot.armBeamsEnable = sw_arm_beams;
 
     } break;
 
     case State::STATE_3KV_TIMER: {
       // TIMER: CCS/Beam off, 3kV forced off for TIMER_3KV_MS
-      outputCCS  = false;
-      outputBeamAllow = false;
-      output3kEnable  = false;
+      outputSnapshot.ccsPowerEnable  = false;
+      outputSnapshot.armBeamsEnable = false;
+      outputSnapshot.enable3kV  = false;
 
       if ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS) {
         currentState = State::STATE_INTERLOCK;
@@ -351,11 +365,11 @@ static inline void step() {
   }
 
   // ---- Flags  ----
-  const bool nomOp = (currentState == State::STATE_NOM_OP);
-  write_flags(inputSnapshot, nomOp);
+  outputSnapshot.nomOp = (currentState == State::STATE_NOM_OP);
+  write_flags(inputSnapshot, outputSnapshot);
 
   // ---- Drive outputs ----
-  write_outputs(outputCCS, outputBeamAllow, output3kEnable, !nomOp);
+  write_outputs(outputSnapshot);
 }
 
 // ========================= Arduino Hook Functions =========================
@@ -377,10 +391,11 @@ void setup() {
   // Produce a initial flag image and set outputs
   Sample raw;
   sample_inputs(raw);
-  write_flags(raw, false);
+  Output out = {false, false, false, false};
+  write_flags(raw, out);
 
   // Ensure outputs are in safe posture
-  write_outputs(false, false, false, true);
+  write_outputs(out);
 }
 
 void loop() {
