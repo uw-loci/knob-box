@@ -23,27 +23,31 @@
 
 // Discrete Inputs (Function Code 02)
 #define DINPUT_HVENABLE_ADDR            0
-#define DINPUT_ARMBEAMS_ADDR            1
-#define DINPUT_CCSPOWER_ADDR            2
-#define DINPUT_ARM80KV_ADDR             3 
+// just for matsusadas
+#define DINPUT_RESET_STATE_ADDR         1
+// just for 3kV Bertan
+#define DINPUT_ARMBEAMS_ADDR            2
+#define DINPUT_CCSPOWER_ADDR            3
+#define DINPUT_ARM80KV_ADDR             4
+#define DINPUT_3KV_ENABLE_ADDR          5 
 // (flags)
-#define DINPUT_NOMOP_FLAG_ADDR          4
-#define DINPUT_3K_HVENABLE_FLAG_ADDR    5
-#define DINPUT_ARMBEAMS_FLAG_ADDR       6
-#define DINPUT_CCSPOWER_FLAG_ADDR       7
-#define DINPUT_ARM80KV_FLAG_ADDR        8
-#define DINPUT_1K_VCOMP_FLAG_ADDR       9
-#define DINPUT_1K_ICOMP_FLAG_ADDR       10
-#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   11
-#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   12
-#define DINPUT_20K_VCOMP_FLAG_ADDR      13
-#define DINPUT_20K_ICOMP_FLAG_ADDR      14
-#define DINPUT_3K_VCOMP_FLAG_ADDR       15
-#define DINPUT_3K_ICOMP_FLAG_ADDR       16
+#define DINPUT_NOMOP_FLAG_ADDR          6
+#define DINPUT_3K_HVENABLE_FLAG_ADDR    7
+#define DINPUT_ARMBEAMS_FLAG_ADDR       8
+#define DINPUT_CCSPOWER_FLAG_ADDR       9
+#define DINPUT_ARM80KV_FLAG_ADDR        10
+#define DINPUT_1K_VCOMP_FLAG_ADDR       11
+#define DINPUT_1K_ICOMP_FLAG_ADDR       12
+#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   13
+#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   14
+#define DINPUT_20K_VCOMP_FLAG_ADDR      15
+#define DINPUT_20K_ICOMP_FLAG_ADDR      16
+#define DINPUT_3K_VCOMP_FLAG_ADDR       17
+#define DINPUT_3K_ICOMP_FLAG_ADDR       18
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              4
-#define DINPUT_COUNT            17
+#define DINPUT_COUNT            19
 //============================================================
 //============================================================
 
@@ -51,8 +55,8 @@
  * GLOBAL MONITORING ARDUINO ID
  *      - 1: -1kV Matsusada
  *      - 2: +1kV Matsusada
- *      - 3: +3kV Bertan
- *      - 4: +20kV Bertan
+ *      - 3: +20kV Bertan
+ *      - 4: +3kV Bertan
  */
 const int ps_id = 1;
 
@@ -66,31 +70,34 @@ const int ps_id = 1;
 /**
  * Pin assignments
  */
-#define I_THRESH                A0      // Current Comparator threshold voltage
-#define V_THRESH                A1      // Voltage Comparator threshold voltage
-#define RESET_LED               6       // Yellow Matsusada Reset Indicator Light
-#define HV_ENABLE               7       // Active low
-#define ARM_BEAMS               11      // Active low
-#define CCS_POWER_ALLOW         12      // Active Low
-#define ARM_80KV                13      // Active low
-#define RS485_RX                19
-#define RS485_TX                18
-#define RS485_DIR               17      // low = receive mode
-#define FLAGS_ACK_PIN           14      // ack pin to Logic Arduino
+#define I_THRESH_PIN                    A0      // Current Comparator threshold voltage
+#define V_THRESH_PIN                    A1      // Voltage Comparator threshold voltage
+#define RESET_LED_PIN                   6       // Yellow Matsusada Reset Indicator Light
+#define HV_ENABLE_SWITCH_PIN            7       // Active low (shorted to D10)
+#define ARM_BEAMS_SWITCH_PIN            11      // Active low
+#define CCS_POWER_ALLOW_SWITCH_PIN      12      // Active Low
+#define ARM_80KV_SWITCH_PIN             13      // Active low
+#define RS485_TX_PIN                    18
+#define RS485_DIR_PIN                   17      // low = receive mode
+#define FLAGS_ACK_PIN                   14      // ack pin to Logic Arduino
+// (logic arduino outputs)
+#define OUTPUT_CCSPOWER_PIN             22
+#define OUTPUT_ARMBEAMS_PIN             23
+#define OUTPUT_3KV_ENABLE_PIN        24
 // (flags)
-#define FLAG_NOMOP              25
-#define FLAG_3K_HVENABLE        26
-#define FLAG_ARMBEAMS           27
-#define FLAG_CCSPOWER           28
-#define FLAG_ARM80KV            29
-#define FLAG_1K_VCOMP           30
-#define FLAG_1K_ICOMP           31
-#define FLAG_NEG_1K_VCOMP       32
-#define FLAG_NEG_1K_ICOMP       33
-#define FLAG_20K_VCOMP          34
-#define FLAG_20K_ICOMP          35
-#define FLAG_3K_VCOMP           36
-#define FLAG_3K_ICOMP           37
+#define FLAG_NOMOP_PIN                  25
+#define FLAG_3K_HVENABLE_PIN            26
+#define FLAG_ARMBEAMS_PIN               27
+#define FLAG_CCSPOWER_PIN               28
+#define FLAG_ARM80KV_PIN                29
+#define FLAG_1K_VCOMP_PIN               30
+#define FLAG_1K_ICOMP_PIN               31
+#define FLAG_NEG_1K_VCOMP_PIN           32
+#define FLAG_NEG_1K_ICOMP_PIN           33
+#define FLAG_20K_VCOMP_PIN              34
+#define FLAG_20K_ICOMP_PIN              35
+#define FLAG_3K_VCOMP_PIN               36
+#define FLAG_3K_ICOMP_PIN               37
 
 /**
  * Other declarations and initializations
@@ -134,6 +141,9 @@ static inline uint16_t round_clamp_u16(float x)
     return (uint16_t)(x + 0.5f);
 }
 
+/**
+ * Helper to ensure raw ADS reads are clamped to expected range.
+ */
 static inline int16_t clamp_i16_positive(float x)
 {
     if (x < 0.0f) return 0;
@@ -176,54 +186,63 @@ bool read_value()
     /* 
     Calculate voltage and current thresholds. 
     */
-    iPot_V = analogRead(I_THRESH) * (5.0 / 1023.0);
-    vPot_V = analogRead(V_THRESH) * (5.0 / 1023.0);
+    iPot_V = analogRead(I_THRESH_PIN) * (5.0 / 1023.0);
+    vPot_V = analogRead(V_THRESH_PIN) * (5.0 / 1023.0);
     // Convert pot values to fullscale thresholds
     thresholdHV_V = (vPot_V / 5.0) * ratedHV_V;
     thresholdI_mA = (iPot_V / 5.0) * ratedI_mA;
 
     /*
-    Read switch states and store in RS-485 discrete inputs.
+    Read HV Enable switch state and store in RS-485 discrete input.
     */
-    ModbusRTUServer.discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE) == LOW);
-    ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(ARM_BEAMS) == LOW);
-    ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(CCS_POWER_ALLOW) == LOW);
-    ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV) == LOW);
+    ModbusRTUServer.discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
 
     /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
     the potentiometer set voltage is greater than a near zero threshold, but both the actual 
     current and actual voltage are at near zero values.*/
     if (ps_id == 1 || ps_id == 2) { // Matsusadas
-        if (resetState == false && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
+        if (resetState == false && digitalRead(HV_ENABLE_SWITCH_PIN) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
             // reset state found
-            digitalWrite(RESET_LED, HIGH);
+            digitalWrite(RESET_LED_PIN, HIGH);
             resetState = true;
-        } else if (resetState == true && digitalRead(HV_ENABLE) == LOW && programmedHV_V > 1 && measuredHV_V > RESET_THRESHOLD_V && measuredI_mA > RESET_THRESHOLD_I) {
+            ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 1);
+        } else if (resetState == true && digitalRead(HV_ENABLE_SWITCH_PIN) == LOW && programmedHV_V > 1 && measuredHV_V > RESET_THRESHOLD_V && measuredI_mA > RESET_THRESHOLD_I) {
             // psu has come out of reset state
-            digitalWrite(RESET_LED, LOW);
+            digitalWrite(RESET_LED_PIN, LOW);
             resetState = false;
+            ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 0);
         }
     }
 
-    /* Read Logic Arduino Flags */
-    if (ps_id == 3) { // only for +3kV Bertan
+    /**
+     *  3kV Bertan specific: read flags, logic arduino outputs, and switch states.
+     */
+    if (ps_id == 4) { // only for +3kV Bertan
 
-        // read flags into RS-485 discrete inputs
-        ModbusRTUServer.discreteInputWrite(DINPUT_NOMOP_FLAG_ADDR, digitalRead(FLAG_NOMOP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_3K_HVENABLE_FLAG_ADDR, digitalRead(FLAG_3K_HVENABLE));
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_FLAG_ADDR, digitalRead(FLAG_ARMBEAMS));
-        ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_FLAG_ADDR, digitalRead(FLAG_CCSPOWER));
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_FLAG_ADDR, digitalRead(FLAG_ARM80KV));
-        ModbusRTUServer.discreteInputWrite(DINPUT_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_1K_VCOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_1K_ICOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_VCOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_ICOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_20K_VCOMP_FLAG_ADDR, digitalRead(FLAG_20K_VCOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_20K_ICOMP_FLAG_ADDR, digitalRead(FLAG_20K_ICOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_3K_VCOMP_FLAG_ADDR, digitalRead(FLAG_3K_VCOMP));
-        ModbusRTUServer.discreteInputWrite(DINPUT_3K_ICOMP_FLAG_ADDR, digitalRead(FLAG_3K_ICOMP));
+        // read switch state of arm 80kV
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
 
-        // ack read so logic arduino can reset and continue
+        // read logic arduino outputs
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(OUTPUT_ARM_BEAMS_PIN) == LOW);
+        ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(OUTPUT_CCSPOWER_PIN) == LOW);
+        ModbusRTUServer.discreteInputWrite(DINPUT_3KV_ENABLE_ADDR, digitalRead(OUTPUT_3KV_ENABLE_PIN) == LOW);
+
+        // read flags
+        ModbusRTUServer.discreteInputWrite(DINPUT_NOMOP_FLAG_ADDR, digitalRead(FLAG_NOMOP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_3K_HVENABLE_FLAG_ADDR, digitalRead(FLAG_3K_HVENABLE_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_FLAG_ADDR, digitalRead(FLAG_ARMBEAMS_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_FLAG_ADDR, digitalRead(FLAG_CCSPOWER_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_FLAG_ADDR, digitalRead(FLAG_ARM80KV_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_1K_VCOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_1K_ICOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_VCOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_ICOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_20K_VCOMP_FLAG_ADDR, digitalRead(FLAG_20K_VCOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_20K_ICOMP_FLAG_ADDR, digitalRead(FLAG_20K_ICOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_3K_VCOMP_FLAG_ADDR, digitalRead(FLAG_3K_VCOMP_PIN));
+        ModbusRTUServer.discreteInputWrite(DINPUT_3K_ICOMP_FLAG_ADDR, digitalRead(FLAG_3K_ICOMP_PIN));
+
+        // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
             pinMode(FLAGS_ACK_PIN, OUTPUT);
             digitalWrite(FLAGS_ACK_PIN, LOW);
@@ -284,26 +303,7 @@ bool display_value()
 
             break;
 
-        case 3: // +3kV Bertan
-            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
-            lcd.setCursor(0,0);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", int(measuredHV_V));
-            lcd.setCursor(0,1);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
-            lcd.setCursor(0,2);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_V);
-            lcd.setCursor(0,3);
-            lcd.print(buffer);
-
-            break;
-
-        case 4: // +20kV Bertan
+        case 3: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
@@ -323,6 +323,25 @@ bool display_value()
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", thresholdI_buf, thresholdHV_buf);
+            lcd.setCursor(0,3);
+            lcd.print(buffer);
+
+            break;
+
+        case 4: // +3kV Bertan
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
+            lcd.setCursor(0,0);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", int(measuredHV_V));
+            lcd.setCursor(0,1);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
+            lcd.setCursor(0,2);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_V);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -358,23 +377,28 @@ void setup()
     lcd.clear();
     lcd.setCursor(0, 0);
 
-    pinMode(HV_ENABLE, INPUT_PULLUP);
+    pinMode(HV_ENABLE_SWITCH_PIN, INPUT_PULLUP);
 
     // Configure HVPSU specs
     switch (ps_id) {
         case 1: // -1kV Matsusada
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
-            pinMode(RESET_LED, OUTPUT);
+            pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
         case 2: // +1kV Matsusada
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
-            pinMode(RESET_LED, OUTPUT);
+            pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
-        case 3: // +3kV Bertan
+        case 3: // +20kV Bertan
+            ratedHV_V = 20000.0;
+            ratedI_mA = 1.0;
+            break;
+
+        case 4: // +3kV Bertan
             ratedHV_V = 3000.0;
             ratedI_mA = 10.0;
 
@@ -394,20 +418,15 @@ void setup()
             pinMode(37, INPUT); 
             pinMode(FLAGS_ACK_PIN, INPUT);
             // switches only monitored by +3kV
-            pinMode(ARM_BEAMS, INPUT_PULLUP);
-            pinMode(CCS_POWER_ALLOW, INPUT_PULLUP);
-            pinMode(ARM_80KV, INPUT_PULLUP);
+            pinMode(ARM_BEAMS_SWITCH_PIN, INPUT_PULLUP);
+            pinMode(CCS_POWER_ALLOW_SWITCH_PIN, INPUT_PULLUP);
+            pinMode(ARM_80KV_SWITCH_PIN, INPUT_PULLUP);
 
-            break;
-
-        case 4: // +20kV Bertan
-            ratedHV_V = 20000.0;
-            ratedI_mA = 1.0;
             break;
     }
 
     // Setup RS-485
-    RS485.setPins(RS485_TX, RS485_DIR, RS485_DIR); // DE and RE pins shorted together
+    RS485.setPins(RS485_TX_PIN, RS485_DIR_PIN, RS485_DIR_PIN); // DE and RE pins shorted together
     RS485.begin(9600);
     if (!ModbusRTUServer.begin(ps_id, 9600)) { // address of slave lines up with ps_id
         Serial.println("Failed to start Modbus RTU Server");
