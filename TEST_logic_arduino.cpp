@@ -851,6 +851,7 @@ static void testSuiteGlitchesInformational() {
   if (!expectNomOp(false)) return;
   if (!expectOutputs(false,false,false,true)) return;
 
+  delay(LOGIC_TIMER_3KV_MS + 10); // make sure we are out of 3k timer state
   suiteStart();
 }
 
@@ -865,6 +866,7 @@ static void testSuiteOutputMirrorFlags() {
 
   beginCase(902, F("INTERLOCK: sw3kv ON -> A2 ON; mirror flags track immediately"));
   swOn(P.sw3kv);
+  delay(1);
   if (!expectNomOp(false)) return;
   if (!expectOutputs(false,false,true,true)) return;
 
@@ -875,29 +877,39 @@ static void testSuiteOutputMirrorFlags() {
   beginCase(904, F("Enter NOM_OP, then toggle A0/A1 via switches; mirror flags track current (not latched)"));
   swOn(P.sw80kv);
   resetPulseNomOp();
+  delay(1);
   if (!expectNomOp(true)) return;
   if (!expectOutputs(false,false,true,false)) return;
 
   swOn(P.swCCS);
+  delay(1);
   if (!expectOutputs(true,false,true,false)) return;
   swOff(P.swCCS);
+  delay(1);
   if (!expectOutputs(false,false,true,false)) return;
 
   swOn(P.swBeams);
+  delay(1);
   if (!expectOutputs(false,true,true,false)) return;
   swOff(P.swBeams);
+  delay(1);
   if (!expectOutputs(false,false,true,false)) return;
 
   beginCase(905, F("Mirror flags are NOT latched: rapid A0 toggles must always reflect CURRENT state"));
   for (uint8_t i = 0; i < 4; i++) {
-    swOn(P.swCCS);  if (!expectOutputs(true,false,true,false, 2)) return;
-    swOff(P.swCCS); if (!expectOutputs(false,false,true,false, 2)) return;
+    swOn(P.swCCS);
+    delay(1);  
+    if (!expectOutputs(true,false,true,false, 2)) return;
+    swOff(P.swCCS); 
+    delay(1);
+    if (!expectOutputs(false,false,true,false, 2)) return;
   }
 
   beginCase(906, F("Exit NOM_OP via non-3kV comparator fault: outputs go safe and mirror flags MUST drop even though latches may stay set"));
   // Turn on A0 and A1 first
   swOn(P.swCCS);
   swOn(P.swBeams);
+  delay(1);
   if (!expectOutputs(true,true,true,false)) return;
 
   // Trip a non-3k comparator (idx 0) -> should return to INTERLOCK (not timer)
@@ -913,6 +925,7 @@ static void testSuiteOutputMirrorFlags() {
   // Ensure sw3kv is ON and we are in interlock
   swOn(P.sw3kv);
   swOff(P.sw80kv);
+  delay(1);
   if (!expectNomOp(false)) return;
   if (!expectOutputs(false,false,true,true)) return;
 
