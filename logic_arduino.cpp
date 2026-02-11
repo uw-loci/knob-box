@@ -53,7 +53,7 @@ struct Output;
 
 // ========================= Constants =========================
 static constexpr uint32_t TIMER_3KV_MS   = 100;
-static constexpr uint8_t  DEBOUNCE_BITS = 6;    // Can be set from 1 to 8
+static constexpr uint8_t  DEBOUNCE_BITS = 6;    // Can be set from 1 to 31 (do NOT set an illegal number for this, weird stuf could happen)
 
 // ========================= Port mapping =========================
 // Switches D10-13 => PB4-PB7
@@ -90,8 +90,8 @@ static constexpr uint8_t MASK_INTERLOCK_LED = _BV(PH1); // D16
 static constexpr uint8_t MASK_ACK       = _BV(PJ1); // D14
 static constexpr uint8_t MASK_RESET_BTN = _BV(PJ0); // D15
 
-// creates a mask based off of debounce bits. Ex. 00011111 for 5
-static constexpr uint8_t MASK_DEBOUNCE = (uint8_t)((1u << DEBOUNCE_BITS) - 1u);
+// creates a mask based off of debounce bits. Ex. 0...00011111 for 5
+static constexpr uint32_t MASK_DEBOUNCE = (uint32_t)((1u << DEBOUNCE_BITS) - 1u);
 
 // Comparator masks
 // PL0=D49 3kV I, PL1=D48 3kV V
@@ -105,17 +105,17 @@ static uint8_t prevPORTF = 0;
 static uint8_t prevPORTH = 0;
 
 // Used to store the previous states of switches / button for debouncing
-static uint8_t switchHist[4] = {0,0,0,0};
+static uint32_t switchHist[4] = {0,0,0,0};
 static bool    switchStable[4] = {false, false, false, false};
-static uint8_t resetButtonHist = 0;
+static uint32_t resetButtonHist = 0;
 static bool    resetButtonStable = false;
 static bool    prevResetButtonDb = false;
 
 // ========================= Helpers =========================
 
-static inline bool debounce_update(uint8_t &hist, bool sample, bool &stable) {
-  hist = (uint8_t)((hist << 1) | (sample ? 1u : 0u));         // shift bits left, put most recent sample bit in lsb
-  const uint8_t maskedHist = (uint8_t)(hist & MASK_DEBOUNCE);
+static inline bool debounce_update(uint32_t &hist, bool sample, bool &stable) {
+  hist = (uint32_t)((hist << 1) | (sample ? 1u : 0u));         // shift bits left, put most recent sample bit in lsb
+  const uint32_t maskedHist = (uint32_t)(hist & MASK_DEBOUNCE);
 
   if (maskedHist == 0) {                      // fully debounced 0 register
     stable = false;
