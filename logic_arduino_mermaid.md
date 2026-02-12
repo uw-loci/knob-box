@@ -1,3 +1,4 @@
+```mermaid
 flowchart TD
     START[Power up or reset]
     START ==> INIT["Hardware Initialization\nio_init_registers()"]
@@ -10,7 +11,7 @@ flowchart TD
 
     DEBOUNCE ==> SWITCHES[Compute debounced reset button and switch states]
 
-    SWITCHES ==> STATE{{Current State?}}
+    SWITCHES ==> STATE{Current State?}
 
     STATE ===> INTERLOCK[STATE_INTERLOCK]
     INTERLOCK ==> I_3KVI{{3kV overcurrent fault?}}
@@ -24,9 +25,9 @@ flowchart TD
     I_NOMOP_T ===> I_TO_NOMOP[Enter STATE_NOM_OP]
     I_NOMOP_F ===> I_STAY_I[Remain STATE_INTERLOCK]
 
-    I_TO_TIMER ==> OUT_ASSIGN
-    I_TO_NOMOP ==> OUT_ASSIGN
-    I_STAY_I ==> OUT_ASSIGN
+    I_TO_TIMER ==> OUT_STATE
+    I_TO_NOMOP ==> OUT_STATE
+    I_STAY_I ==> OUT_STATE
 
     STATE ===> NOMOP[STATE_NOM_OP]
     NOMOP ==> N_3KVFAULT{{3kV I fault OR 3kV V fault?}}
@@ -40,9 +41,9 @@ flowchart TD
     N_OTHER_T ===> N_TO_INTERLOCK[Exit to STATE_INTERLOCK]
     N_OTHER_F ===> N_STAY_N[Remain STATE_NOM_OP]
 
-    N_TO_TIMER ==> OUT_ASSIGN
-    N_TO_INTERLOCK ==> OUT_ASSIGN
-    N_STAY_N ==> OUT_ASSIGN
+    N_TO_TIMER ==> OUT_STATE
+    N_TO_INTERLOCK ==> OUT_STATE
+    N_STAY_N ==> OUT_STATE
 
     STATE ===> TIMER[STATE_3KV_TIMER]
     TIMER ==> T_EXPIRE{{"millis() - timerEnterMs >= 100 ms"}}
@@ -51,11 +52,23 @@ flowchart TD
     T_EXP_T ===> T_TO_INTERLOCK[Enter STATE_INTERLOCK]
     T_EXP_F ===> T_STAY_T[Remain STATE_3KV_TIMER]
 
-    T_TO_INTERLOCK ==> OUT_ASSIGN
-    T_STAY_T ==> OUT_ASSIGN
+    T_TO_INTERLOCK ==> OUT_STATE
+    T_STAY_T ==> OUT_STATE
 
-    OUT_ASSIGN[Assign outputs based on currentState\nINTERLOCK: CCS = OFF, Beam = OFF, 3kV = switch\n  NOM_OP: CCS = switch, Beam = switch,  3kV = switch\nTIMER: CCS = OFF, Beam = OFF, 3kV = OFF]
+    OUT_STATE{Current State?}
 
-    OUT_ASSIGN ==> FLAGS[Update Flags]
-    
+    OUT_STATE ===> OUT_INTERLOCK_STATE[STATE_INTERLOCK]
+    OUT_STATE ===> OUT_NOMOP_STATE[STATE_NOM_OP]
+    OUT_STATE ===> OUT_TIMER_STATE[STATE_3KV_TIMER]
+
+    OUT_INTERLOCK_STATE ==> OUT_INTERLOCK[Outputs\nCCS = OFF\nBeam = OFF\n3kV = 3kV enable switch]
+    OUT_NOMOP_STATE ==> OUT_NOMOP[Outputs\nCCS = CCS allow switch\nBeam = Arm Beams switch\n3kV = 3kV enable switch]
+    OUT_TIMER_STATE ==> OUT_TIMER[Outputs\nCCS = OFF\nBeam = OFF\n3kV = OFF]
+
+    OUT_INTERLOCK ==> FLAGS[Update Flags]
+    OUT_NOMOP ==> FLAGS
+    OUT_TIMER ==> FLAGS
+
     FLAGS ==> LOOP
+
+```
