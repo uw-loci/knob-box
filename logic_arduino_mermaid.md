@@ -1,3 +1,4 @@
+```mermaid
 stateDiagram-v2
   direction TB
 
@@ -39,3 +40,4 @@ stateDiagram-v2
   TIMER --> INTERLOCK : if (millis() - timerEnterMs) >= 100 ms
 
   TIMER --> TIMER : else (still timing)\n\nActions every loop:\n  CCS=OFF\n  Beam=OFF\n  3kV=OFF
+```
