@@ -14,7 +14,7 @@ flowchart TD
     SWITCHES ==> STATE{Current State?}
 
     STATE ===> INTERLOCK[STATE_INTERLOCK]
-    INTERLOCK ==> I_3KVI{{3kV overcurrent fault?}}
+    INTERLOCK ==> I_3KVI{{3kV I fault?}}
     I_3KVI ==> I_3KVI_T[True]
     I_3KVI ==> I_3KVI_F[False]
     I_3KVI_T ===> I_TO_TIMER[Enter STATE_3KV_TIMER]
