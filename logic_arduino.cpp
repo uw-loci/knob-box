@@ -275,8 +275,6 @@ static inline void write_outputs(const Output& out) {
 
 // ========================= State machine step =========================
 static inline void step() {
-  
-
   static uint32_t timerEnterMs = 0;
 
   // Sample all inputs
@@ -290,7 +288,6 @@ static inline void step() {
   const bool resetButtonEdge = resetButtonDb && !prevResetButtonDb;
 
   prevResetButtonDb = resetButtonDb;
-  
 
   // Switch states (debounced, asserted=1)
   const bool sw_3kv_enable = (switchesDebounced & _BV(PB4)) != 0; // D10
@@ -308,20 +305,15 @@ static inline void step() {
       // Check for 3kv overcurrent right away, if so, change outputs and break
       if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
         currentState = State::STATE_3KV_TIMER;
-        outputSnapshot.enable3kV = false;
         timerEnterMs = millis();
         break;
       }
-
-      outputSnapshot.ccsPowerEnable  = false;
-      outputSnapshot.armBeamsEnable = false;
-      outputSnapshot.enable3kV  = sw_3kv_enable;
 
       // Enter NomOp only on reset button edge and all comparators SAFE and 80k asserted and 3k asserted
       if (resetButtonEdge && (inputSnapshot.comparators == 0) && sw_arm_80kv && sw_3kv_enable) {
         currentState = State::STATE_NOM_OP;
       }
-      
+
     } break;
 
     case State::STATE_NOM_OP: {
@@ -329,39 +321,44 @@ static inline void step() {
       // Check for 3kv right away, if so, break and change output & flags
       if (inputSnapshot.comparators & MASK_COMP_3KV) {
         currentState = State::STATE_3KV_TIMER;
-        outputSnapshot.ccsPowerEnable  = false;
-        outputSnapshot.armBeamsEnable = false;
-        outputSnapshot.enable3kV  = false;
         timerEnterMs = millis();
         break;
       }
 
       // If required interlock switches drop, or any other comparators trip return to BI
-      if ((inputSnapshot.comparators != 0) ||!sw_arm_80kv || !sw_3kv_enable) {
+      if ((inputSnapshot.comparators != 0) || !sw_arm_80kv || !sw_3kv_enable) {
         currentState = State::STATE_INTERLOCK;
-        outputSnapshot.ccsPowerEnable  = false;
-        outputSnapshot.armBeamsEnable = false;
-        outputSnapshot.enable3kV  = sw_3kv_enable;
         break;
       }
-
-      // NomOp: normal outputs follow their own switches
-      outputSnapshot.enable3kV  = sw_3kv_enable;
-      outputSnapshot.ccsPowerEnable  = sw_ccs_allow;
-      outputSnapshot.armBeamsEnable = sw_arm_beams;
 
     } break;
 
     case State::STATE_3KV_TIMER: {
-      // TIMER: CCS/Beam off, 3kV forced off for TIMER_3KV_MS
-      outputSnapshot.ccsPowerEnable  = false;
-      outputSnapshot.armBeamsEnable = false;
-      outputSnapshot.enable3kV  = false;
-
       if ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS) {
         currentState = State::STATE_INTERLOCK;
       }
     } break;
+  }
+
+  // ---- Output mapping (separate from transition logic) ----
+  switch (currentState) {
+    case State::STATE_INTERLOCK:
+      outputSnapshot.ccsPowerEnable  = false;
+      outputSnapshot.armBeamsEnable  = false;
+      outputSnapshot.enable3kV       = sw_3kv_enable;
+      break;
+
+    case State::STATE_NOM_OP:
+      outputSnapshot.enable3kV       = sw_3kv_enable;
+      outputSnapshot.ccsPowerEnable  = sw_ccs_allow;
+      outputSnapshot.armBeamsEnable  = sw_arm_beams;
+      break;
+
+    case State::STATE_3KV_TIMER:
+      outputSnapshot.ccsPowerEnable  = false;
+      outputSnapshot.armBeamsEnable  = false;
+      outputSnapshot.enable3kV       = false;
+      break;
   }
 
   // ---- Flags  ----
