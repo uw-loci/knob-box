@@ -302,7 +302,7 @@ static inline void step() {
   switch (currentState) {
     case State::STATE_INTERLOCK: {
 
-      // Check for 3kv overcurrent right away, if so, change outputs and break
+      // Check for 3kv overcurrent right away
       if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
         currentState = State::STATE_3KV_TIMER;
         timerEnterMs = millis();
@@ -318,7 +318,7 @@ static inline void step() {
 
     case State::STATE_NOM_OP: {
 
-      // Check for 3kv right away, if so, break and change output & flags
+      // Check for 3kv comparator trips right away
       if (inputSnapshot.comparators & MASK_COMP_3KV) {
         currentState = State::STATE_3KV_TIMER;
         timerEnterMs = millis();
@@ -340,29 +340,31 @@ static inline void step() {
     } break;
   }
 
-  // ---- Output mapping (separate from transition logic) ----
+  // ---- Assign Outputs ----
   switch (currentState) {
     case State::STATE_INTERLOCK:
       outputSnapshot.ccsPowerEnable  = false;
       outputSnapshot.armBeamsEnable  = false;
       outputSnapshot.enable3kV       = sw_3kv_enable;
+      outputSnapshot.nomOp           = false;
       break;
 
     case State::STATE_NOM_OP:
-      outputSnapshot.enable3kV       = sw_3kv_enable;
       outputSnapshot.ccsPowerEnable  = sw_ccs_allow;
       outputSnapshot.armBeamsEnable  = sw_arm_beams;
+      outputSnapshot.enable3kV       = sw_3kv_enable;
+      outputSnapshot.nomOp           = true;
       break;
 
     case State::STATE_3KV_TIMER:
       outputSnapshot.ccsPowerEnable  = false;
       outputSnapshot.armBeamsEnable  = false;
       outputSnapshot.enable3kV       = false;
+      outputSnapshot.nomOp           = false;
       break;
   }
 
   // ---- Flags  ----
-  outputSnapshot.nomOp = (currentState == State::STATE_NOM_OP);
   write_flags(inputSnapshot, outputSnapshot);
 
   // ---- Drive outputs ----
