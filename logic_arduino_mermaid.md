@@ -65,10 +65,12 @@ flowchart TD
     OUT_NOMOP_STATE ==> OUT_NOMOP[Outputs\nCCS = CCS allow switch\nBeam = Arm Beams switch\n3kV = 3kV enable switch]
     OUT_TIMER_STATE ==> OUT_TIMER[Outputs\nCCS = OFF\nBeam = OFF\n3kV = OFF]
 
-    OUT_INTERLOCK ==> FLAGS[Update Flags]
-    OUT_NOMOP ==> FLAGS
-    OUT_TIMER ==> FLAGS
+    OUT_INTERLOCK ==> WRITE_OUTPUTS[Write Outputs]
+    OUT_NOMOP ==> WRITE_OUTPUTS
+    OUT_TIMER ==> WRITE_OUTPUTS
 
+    WRITE_OUTPUTS ==> FLAGS[Update Flags]
+    
     FLAGS ==> LOOP
 
 ```
