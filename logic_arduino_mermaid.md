@@ -1,3 +1,4 @@
+```mermaid
 flowchart TD
     START[setup]
     START ==> INIT[Initialize IO registers, pullups, outputs safe, flags default]
@@ -56,6 +57,7 @@ flowchart TD
     CLEAR_LATCH ==> LATCH_NEW
     ACK_TOGGLE ===> LATCH_NEW[Latch flags: comparators or= sample.comparators, switches or= sample.switchesAssertPortB]
     LATCH_NEW ==> PORTA_BUILD[Build PORTA: PA0-PA2 outputs, PA3 nomOp, PA4-PA7 latched switches]
+```
     PORTA_BUILD ==> PORT_WRITE[Write PORTA and PORTC latched comparator faults]
     PORT_WRITE ==> WRITE_OUTPUTS[write_outputs]
     WRITE_OUTPUTS ==> LOOPBACK[loop calls step again]
