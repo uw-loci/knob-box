@@ -1,4 +1,44 @@
 ```mermaid
+%%{init:{
+  "theme":"base",
+  "flowchart":{
+    "nodeSpacing":12,
+    "rankSpacing":18,
+    "padding":4,
+    "curve":"linear",
+    "useMaxWidth": true
+  },
+  "themeVariables":{
+    "fontFamily":"Inter, Segoe UI, Arial",
+    "fontSize":"14px",
+
+    "background":"#ffffff",
+    "textColor":"#0f172a",
+
+    "primaryColor":"#f1f5f9",
+    "primaryTextColor":"#0f172a",
+    "primaryBorderColor":"#2563eb",
+
+    "secondaryColor":"#e2e8f0",
+    "secondaryTextColor":"#0f172a",
+    "secondaryBorderColor":"#64748b",
+
+    "tertiaryColor":"#f8fafc",
+    "tertiaryTextColor":"#0f172a",
+    "tertiaryBorderColor":"#64748b",
+
+    "lineColor":"#334155",
+    "arrowheadColor":"#334155",
+
+    "clusterBkg":"#f8fafc",
+    "clusterBorder":"#94a3b8",
+
+    "noteBkg":"#eff6ff",
+    "noteBorderColor":"#2563eb",
+    "noteTextColor":"#0f172a"
+  }
+}}%%
+
 flowchart TD
     START[Power up or reset]
     START ==> INIT["Hardware Initialization\nio_init_registers()"]
