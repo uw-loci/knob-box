@@ -1,8 +1,7 @@
 /* TODOs:
-    - reset logic: does it work, does it need separate entry/exit thresholds
+    - matsusada reset logic --> difference between set and measured? or current approach?
 
-    - RS-485 Discrete Inputs:
-        interlock state, "overcurrent" state? 
+    - 3kV reset logic --> implemented a counter of overcurrent events while in reset state
     */
 
 #include <arduino-timer.h>
@@ -15,39 +14,47 @@
 
 //============= MODBUS MAP ==================================
 //===========================================================
-// Input Registers (Function Code 04)
-#define IREG_HEALTH_ADDR        0   // TODO track health/error mode
-#define IREG_V_SET_ADDR         1   // integer volts
-#define IREG_V_READ_ADDR        2   // integer volts
-#define IREG_I_READ_ADDR        3   // integer microamps
+/*
+Input Registers (Function Code 04)
+*/
+#define IREG_HEALTH_ADDR            0   // TODO track health/error mode
+#define IREG_V_SET_ADDR             1   // integer volts
+#define IREG_V_READ_ADDR            2   // integer volts
+#define IREG_I_READ_ADDR            3   // integer microamps
+#define IREG_3KV_RESET_COUNT_ADDR   4   // count of reset events for 3kV Bertan
 
-// Discrete Inputs (Function Code 02)
+/*
+Discrete Inputs (Function Code 02)
+*/
 #define DINPUT_HVENABLE_ADDR            0
-// just for matsusadas
-#define DINPUT_RESET_STATE_ADDR         1
-// just for 3kV Bertan
-#define DINPUT_ARMBEAMS_ADDR            2
-#define DINPUT_CCSPOWER_ADDR            3
-#define DINPUT_ARM80KV_ADDR             4
-#define DINPUT_3KV_ENABLE_ADDR          5 
+// Just for matsusadas
+#define DINPUT_RESET_STATE_1KV_ADDR     1
+// Just for 3kV Bertan
+
+// (raw switch states)
+#define DINPUT_ARM80KV_ADDR             3
+// (logic arduino outputs)
+#define DINPUT_ARMBEAMS_ADDR            4
+#define DINPUT_CCSPOWER_ADDR            5
+#define DINPUT_3KV_ENABLE_ADDR          6 
 // (flags)
-#define DINPUT_NOMOP_FLAG_ADDR          6
-#define DINPUT_3K_HVENABLE_FLAG_ADDR    7
-#define DINPUT_ARMBEAMS_FLAG_ADDR       8
-#define DINPUT_CCSPOWER_FLAG_ADDR       9
-#define DINPUT_ARM80KV_FLAG_ADDR        10
-#define DINPUT_1K_VCOMP_FLAG_ADDR       11
-#define DINPUT_1K_ICOMP_FLAG_ADDR       12
-#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   13
-#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   14
-#define DINPUT_20K_VCOMP_FLAG_ADDR      15
-#define DINPUT_20K_ICOMP_FLAG_ADDR      16
-#define DINPUT_3K_VCOMP_FLAG_ADDR       17
-#define DINPUT_3K_ICOMP_FLAG_ADDR       18
+#define DINPUT_NOMOP_FLAG_ADDR          7
+#define DINPUT_3K_HVENABLE_FLAG_ADDR    8
+#define DINPUT_ARMBEAMS_FLAG_ADDR       9
+#define DINPUT_CCSPOWER_FLAG_ADDR       10
+#define DINPUT_ARM80KV_FLAG_ADDR        11
+#define DINPUT_1K_VCOMP_FLAG_ADDR       12
+#define DINPUT_1K_ICOMP_FLAG_ADDR       13
+#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   14
+#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   15
+#define DINPUT_20K_VCOMP_FLAG_ADDR      16
+#define DINPUT_20K_ICOMP_FLAG_ADDR      17
+#define DINPUT_3K_VCOMP_FLAG_ADDR       18
+#define DINPUT_3K_ICOMP_FLAG_ADDR       19
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              4
-#define DINPUT_COUNT            19
+#define DINPUT_COUNT            20
 //============================================================
 //============================================================
 
@@ -83,7 +90,7 @@ const int ps_id = 1;
 // (logic arduino outputs)
 #define OUTPUT_CCSPOWER_PIN             22
 #define OUTPUT_ARMBEAMS_PIN             23
-#define OUTPUT_3KV_ENABLE_PIN        24
+#define OUTPUT_3KV_ENABLE_PIN           24
 // (flags)
 #define FLAG_NOMOP_PIN                  25
 #define FLAG_3K_HVENABLE_PIN            26
@@ -102,24 +109,25 @@ const int ps_id = 1;
 /**
  * Other declarations and initializations
  */
-float               ratedHV_V;              // "rated voltage" -- just the max output of the HVPSU
-float               ratedI_mA;              // same for "rated current"
-float               measuredI_mA;           // calculated values
-float               measuredHV_V;           // ""
-float               programmedHV_V;         // ""
-float               iPot_V;                 // potentiometer values
-float               vPot_V;                 // ""  
-float               thresholdHV_V;          // thresholds
-float               thresholdI_mA;           // ""
-bool                resetState = false;    
-uint16_t            flags = 0;              
-bool                ack_state = false;      // false = HI-Z, true = LOW
-char                buffer[21];             // store formatted string to print to LCD
-char                programmedHV_buf[10];   // store current/voltage values for printing
-char                measuredHV_buf[10];     // ""    
-char                thresholdHV_buf[10];    // ""
-char                measuredI_buf[10];      // ""
-char                thresholdI_buf[10];     // ""
+float               ratedHV_V;                  // "rated voltage" -- just the max output of the HVPSU
+float               ratedI_mA;                  // same for "rated current"
+float               measuredI_mA;               // calculated values
+float               measuredHV_V;               // ""
+float               programmedHV_V;             // ""
+float               iPot_V;                     // potentiometer values
+float               vPot_V;                     // ""  
+float               thresholdHV_V;              // thresholds
+float               thresholdI_mA;              // ""
+bool                resetState1kV = false;      // for Matsusada reset state logic            
+bool                ack_state = false;          // false = HI-Z, true = LOW
+char                buffer[21];                 // store formatted string to print to LCD
+char                programmedHV_buf[10];       // store current/voltage values for printing
+char                measuredHV_buf[10];         // ""    
+char                thresholdHV_buf[10];        // ""
+char                measuredI_buf[10];          // ""
+char                thresholdI_buf[10];         // ""
+bool                prevNomOpState = false;     // for doing 3kV reset state logic 
+int                 resetState3kV = 0;          // count of overcurrent events while in reset state
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
@@ -149,6 +157,49 @@ static inline int16_t clamp_i16_positive(float x)
     if (x < 0.0f) return 0;
     if (x > 32760.0f) return 32767;
     else return (int16_t)x;
+}
+
+/**
+ * Helper to check for Matsusada reset state.
+ * 
+ * From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
+ * the potentiometer set voltage is greater than a near zero threshold, but both the actual 
+ * current and actual voltage are at near zero values.
+ */
+void checkMatsusadaResetState() {
+    bool hvEnabled = digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
+    bool highSetV = programmedHV_V > 1.0;
+
+    if (!resetState && hvEnabled && highSetV &&
+        measuredHV_V < RESET_ENTER_V && measuredI_mA < RESET_ENTER_I) {
+        resetState = true;
+        digitalWrite(RESET_LED_PIN, HIGH);
+        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 1);
+    }
+    else if (resetState && (hvEnabled && measuredHV_V > RESET_EXIT_V && measuredI_mA > RESET_EXIT_I)) {
+        resetState = false;
+        digitalWrite(RESET_LED_PIN, LOW);
+        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 0);
+    }
+}
+
+/**
+ * Helper to check +3kV Bertan reset state. Maintains a counter to track overcurrent events
+ * that happen while in a reset state, which is communicated to the dashboard.
+ */
+void check3KVResetState(bool nomop, bool overcurrent, bool undervoltage) {
+    // on falling edge of nomop, check V-comparator
+    if (preNomOpState && !nomop && undervoltage) {
+        resetState3kV++;
+        ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
+    } else if (overcurrent) {
+        resetState3kV++;
+        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_3KV_ADDR, resetState3kV);
+    } else if (!prevNomOpState && nomop) {
+        // on rising edge of nomop, clear reset state
+        resetState3kV = 0;
+        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_3KV_ADDR, resetState3kV);
+    }
 }
 
 /**
@@ -197,25 +248,17 @@ bool read_value()
     */
     ModbusRTUServer.discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
 
-    /* From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
-    the potentiometer set voltage is greater than a near zero threshold, but both the actual 
-    current and actual voltage are at near zero values.*/
-    if (ps_id == 1 || ps_id == 2) { // Matsusadas
-        if (resetState == false && digitalRead(HV_ENABLE_SWITCH_PIN) == LOW && programmedHV_V > 1 && measuredHV_V < RESET_THRESHOLD_V && measuredI_mA < RESET_THRESHOLD_I) {
-            // reset state found
-            digitalWrite(RESET_LED_PIN, HIGH);
-            resetState = true;
-            ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 1);
-        } else if (resetState == true && digitalRead(HV_ENABLE_SWITCH_PIN) == LOW && programmedHV_V > 1 && measuredHV_V > RESET_THRESHOLD_V && measuredI_mA > RESET_THRESHOLD_I) {
-            // psu has come out of reset state
-            digitalWrite(RESET_LED_PIN, LOW);
-            resetState = false;
-            ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 0);
-        }
-    }
+    /*
+    Check Matsusada reset state.
+    */
+    if (ps_id == 1 || ps_id == 2) { checkMatsusadaResetState(); }
 
     /**
-     *  3kV Bertan specific: read flags, logic arduino outputs, and switch states.
+     *  3kV Bertan specific: 
+     * 
+     *      read flags, logic arduino outputs, and switch states.
+     * 
+     *      check reset state, if active update the counter.
      */
     if (ps_id == 4) { // only for +3kV Bertan
 
@@ -223,12 +266,19 @@ bool read_value()
         ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
 
         // read logic arduino outputs
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(OUTPUT_ARM_BEAMS_PIN) == LOW);
+        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(OUTPUT_ARMBEAMS_PIN) == LOW);
         ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(OUTPUT_CCSPOWER_PIN) == LOW);
         ModbusRTUServer.discreteInputWrite(DINPUT_3KV_ENABLE_ADDR, digitalRead(OUTPUT_3KV_ENABLE_PIN) == LOW);
 
-        // read flags
-        ModbusRTUServer.discreteInputWrite(DINPUT_NOMOP_FLAG_ADDR, digitalRead(FLAG_NOMOP_PIN));
+        // 'important' flags
+        bool nomop = digitalRead(FLAG_NOMOP_PIN);
+        bool overcurrent = digitalRead(FLAG_3K_ICOMP_PIN); // 3kV overcurrent
+        bool undervoltage = digitalRead(FLAG_3K_VCOMP_PIN); // 3kV undervoltage
+
+        // check 3kV reset state
+        check3KVResetState(nomop, overcurrent);
+
+        // other flags --> likely just for logging purposes on dashboard
         ModbusRTUServer.discreteInputWrite(DINPUT_3K_HVENABLE_FLAG_ADDR, digitalRead(FLAG_3K_HVENABLE_PIN));
         ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_FLAG_ADDR, digitalRead(FLAG_ARMBEAMS_PIN));
         ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_FLAG_ADDR, digitalRead(FLAG_CCSPOWER_PIN));
@@ -240,7 +290,6 @@ bool read_value()
         ModbusRTUServer.discreteInputWrite(DINPUT_20K_VCOMP_FLAG_ADDR, digitalRead(FLAG_20K_VCOMP_PIN));
         ModbusRTUServer.discreteInputWrite(DINPUT_20K_ICOMP_FLAG_ADDR, digitalRead(FLAG_20K_ICOMP_PIN));
         ModbusRTUServer.discreteInputWrite(DINPUT_3K_VCOMP_FLAG_ADDR, digitalRead(FLAG_3K_VCOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_3K_ICOMP_FLAG_ADDR, digitalRead(FLAG_3K_ICOMP_PIN));
 
         // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
