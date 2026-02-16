@@ -14,7 +14,7 @@ This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of 
 
 ## Safety model and assumptions
 
-### Comparator inputs (D42–D49, PORTL) are open-drain (wired-safe)
+### Comparator inputs (D42–D49, PORTL) are open-drain
 
 Comparator lines are treated as open-drain/open-collector:
 
@@ -148,7 +148,7 @@ PORTC = prevFlagsComparators;
 
 ## ACK toggle-to-clear protocol (D14 / PJ1)
 
-`write_flags()` uses an ACK level change to clear both latched event flag bytes:
+`write_flags()` uses an ACK level change to clear flags:
 
 - `prevFlagsComparators` (latched comparator faults)
 - `prevFlagsSwitches` (latched switch assertions)
@@ -164,8 +164,6 @@ prevAck = sample.ackLevel;
 ```
 
 This supports a simple dashboard/test harness handshake: **read flags → toggle ACK → flags clear**.
-
-> On first call after boot, `prevAck` starts as `false`. If the external pullup makes ACK high at boot, the first call will detect a “toggle” (false→true) and clear latches (already 0). This is harmless but worth knowing.
 
 ---
 
@@ -185,7 +183,7 @@ if (maskedHist == 0) stable = false;
 else if (maskedHist == MASK_DEBOUNCE) stable = true;
 ```
 
-**Reset edge detection** is performed on the debounced reset signal:
+**Reset Button edge detection** is performed on the debounced reset signal:
 
 ```cpp
 const bool resetButtonEdge = resetButtonDb && !prevResetButtonDb;
@@ -223,16 +221,16 @@ Each `loop()` iteration calls `step()`:
 1. `sample_inputs()` reads raw pins into a `Sample`
 2. Switches + reset are debounced
 3. State transitions are evaluated based on:
-   - comparator faults (immediate)
+   - comparator faults
    - debounced switches
-   - reset **edge**
+   - reset button **edge**
 4. Outputs are assigned from state + debounced switches
 5. Flags are updated (including ACK-cleared latches)
 6. Outputs are driven (register writes only if changed)
 
 ---
 
-## State behavior (as implemented)
+## State behavior
 
 ### `STATE_INTERLOCK` (BI / Interlock)
 **Transitions:**
@@ -284,19 +282,123 @@ Each `loop()` iteration calls `step()`:
 
 ---
 
-## Mermaid diagram (logic-equivalent)
+## Mermaid diagram
 
 ```mermaid
-stateDiagram-v2
-  [*] --> INTERLOCK
+%%{init:{
+  "theme":"base",
+  "flowchart":{
+    "nodeSpacing":12,
+    "rankSpacing":18,
+    "padding":4,
+    "curve":"linear",
+    "useMaxWidth": true
+  },
+  "themeVariables":{
+    "fontFamily":"Inter, Segoe UI, Arial",
+    "fontSize":"14px",
 
-  INTERLOCK --> TIMER_3KV : (comparators & PL0) != 0
-  INTERLOCK --> NOM_OP    : reset_edge && comparators==0 && sw80k && sw3k
+    "background":"#ffffff",
+    "textColor":"#0f172a",
 
-  NOM_OP --> TIMER_3KV    : (comparators & (PL0|PL1)) != 0
-  NOM_OP --> INTERLOCK    : comparators!=0 || !sw80k || !sw3k
+    "primaryColor":"#f1f5f9",
+    "primaryTextColor":"#0f172a",
+    "primaryBorderColor":"#2563eb",
 
-  TIMER_3KV --> INTERLOCK : (millis()-enter_ms) >= TIMER_3KV_MS
+    "secondaryColor":"#e2e8f0",
+    "secondaryTextColor":"#0f172a",
+    "secondaryBorderColor":"#64748b",
+
+    "tertiaryColor":"#f8fafc",
+    "tertiaryTextColor":"#0f172a",
+    "tertiaryBorderColor":"#64748b",
+
+    "lineColor":"#334155",
+    "arrowheadColor":"#334155",
+
+    "clusterBkg":"#f8fafc",
+    "clusterBorder":"#94a3b8",
+
+    "noteBkg":"#eff6ff",
+    "noteBorderColor":"#2563eb",
+    "noteTextColor":"#0f172a"
+  }
+}}%%
+
+flowchart TD
+    START[Power up or reset]
+    START ==> INIT["Hardware Initialization\nio_init_registers()"]
+    INIT ==> DEFAULT["Set default outputs, sample initial inputs"]
+    DEFAULT ==> LOOP["step()"]
+
+    LOOP ==> SAMPLE[Sample logic arduino inputs]
+
+    SAMPLE ==> DEBOUNCE[Debounce switches and reset button]
+
+    DEBOUNCE ==> SWITCHES[Compute debounced reset button and switch states]
+
+    SWITCHES ==> STATE{Current State?}
+
+    STATE ===> INTERLOCK[STATE_INTERLOCK]
+    INTERLOCK ==> I_3KVI{{3kV I fault?}}
+    I_3KVI ==> I_3KVI_T[True]
+    I_3KVI ==> I_3KVI_F[False]
+    I_3KVI_T ===> I_TO_TIMER[Enter STATE_3KV_TIMER]
+    I_3KVI_F ===> I_NOMOP_COND{{Reset button pushed AND comparators safe AND 80kV asserted AND 3kV En asserted}}
+
+    I_NOMOP_COND ==> I_NOMOP_T[True]
+    I_NOMOP_COND ==> I_NOMOP_F[False]
+    I_NOMOP_T ===> I_TO_NOMOP[Enter STATE_NOM_OP]
+    I_NOMOP_F ===> I_STAY_I[Remain STATE_INTERLOCK]
+
+    I_TO_TIMER ==> OUT_STATE
+    I_TO_NOMOP ==> OUT_STATE
+    I_STAY_I ==> OUT_STATE
+
+    STATE ===> NOMOP[STATE_NOM_OP]
+    NOMOP ==> N_3KVFAULT{{3kV I fault OR 3kV V fault?}}
+    N_3KVFAULT ==> N_3KV_T[True]
+    N_3KVFAULT ==> N_3KV_F[False]
+    N_3KV_T ===> N_TO_TIMER[Enter STATE_3KV_TIMER]
+    N_3KV_F ===> N_OTHERFAULT{{Any comparator fault OR 80kV switch off OR 3kV En switch off}}
+
+    N_OTHERFAULT ==> N_OTHER_T[True]
+    N_OTHERFAULT ==> N_OTHER_F[False]
+    N_OTHER_T ===> N_TO_INTERLOCK[Exit to STATE_INTERLOCK]
+    N_OTHER_F ===> N_STAY_N[Remain STATE_NOM_OP]
+
+    N_TO_TIMER ==> OUT_STATE
+    N_TO_INTERLOCK ==> OUT_STATE
+    N_STAY_N ==> OUT_STATE
+
+    STATE ===> TIMER[STATE_3KV_TIMER]
+    TIMER ==> T_EXPIRE{{"millis() - timerEnterMs >= 100 ms"}}
+    T_EXPIRE ==> T_EXP_T[True]
+    T_EXPIRE ==> T_EXP_F[False]
+    T_EXP_T ===> T_TO_INTERLOCK[Enter STATE_INTERLOCK]
+    T_EXP_F ===> T_STAY_T[Remain STATE_3KV_TIMER]
+
+    T_TO_INTERLOCK ==> OUT_STATE
+    T_STAY_T ==> OUT_STATE
+
+    OUT_STATE{Current State?}
+
+    OUT_STATE ===> OUT_INTERLOCK_STATE[STATE_INTERLOCK]
+    OUT_STATE ===> OUT_NOMOP_STATE[STATE_NOM_OP]
+    OUT_STATE ===> OUT_TIMER_STATE[STATE_3KV_TIMER]
+
+    OUT_INTERLOCK_STATE ==> OUT_INTERLOCK[Outputs\nCCS = OFF\nBeam = OFF\n3kV = 3kV enable switch]
+    OUT_NOMOP_STATE ==> OUT_NOMOP[Outputs\nCCS = CCS allow switch\nBeam = Arm Beams switch\n3kV = 3kV enable switch]
+    OUT_TIMER_STATE ==> OUT_TIMER[Outputs\nCCS = OFF\nBeam = OFF\n3kV = OFF]
+
+    OUT_INTERLOCK ==> WRITE_OUTPUTS[Write Outputs]
+    OUT_NOMOP ==> WRITE_OUTPUTS
+    OUT_TIMER ==> WRITE_OUTPUTS
+
+    WRITE_OUTPUTS ==> FLAGS[Update Flags]
+    
+    FLAGS ==> LOOP
+
 ```
 
 ---
@@ -307,9 +409,9 @@ stateDiagram-v2
 
 - `io_init_registers()`:
   - configures DDR registers
-  - enables pullups on inputs (switches, ack/reset, comparators)
+  - enables pullups on inputs (switches, ack, reset button, comparators)
   - forces safe posture on outputs (PF0–PF2 OFF; LED ON)
-  - initializes PORTA/PORTC to 0
+  - initializes flags (PORTA/PORTC) to 0
 - initializes `prevPORTF` / `prevPORTH` to current output registers
 - resets state to `STATE_INTERLOCK`
 - clears debounce histories
@@ -334,22 +436,6 @@ stateDiagram-v2
 
 3. **Debounce time depends on loop rate.**  
    `DEBOUNCE_BITS` is a sample count; any change in loop timing changes debounce time.
-
----
-
-## Extending the firmware safely
-
-If you add new states or signals:
-
-1. Update the `State` enum
-2. Add transition logic in the state machine switch
-3. Add explicit output assignments for the new state(s)
-4. Decide whether the new signal should be:
-   - **live status** (reflect current state), or
-   - **latched event** (sticky until ACK toggles)
-
-**Rule of thumb:** safety-relevant “events” should latch; operational “status” should reflect live state.
-
 ---
 
 ## File of record
