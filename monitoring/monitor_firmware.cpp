@@ -2,7 +2,7 @@
     - matsusada reset logic --> difference between set and measured? or current approach?
 
     - 3kV reset logic --> implemented a counter of overcurrent events while in reset state
-    */
+*/
 
 #include <arduino-timer.h>
 #include <Wire.h>
@@ -32,29 +32,29 @@ Discrete Inputs (Function Code 02)
 // Just for 3kV Bertan
 
 // (raw switch states)
-#define DINPUT_ARM80KV_ADDR             3
+#define DINPUT_ARM80KV_ADDR             2
 // (logic arduino outputs)
-#define DINPUT_ARMBEAMS_ADDR            4
-#define DINPUT_CCSPOWER_ADDR            5
-#define DINPUT_3KV_ENABLE_ADDR          6 
+#define DINPUT_ARMBEAMS_ADDR            3
+#define DINPUT_CCSPOWER_ADDR            4
+#define DINPUT_3KV_ENABLE_ADDR          5 
 // (flags)
-#define DINPUT_NOMOP_FLAG_ADDR          7
-#define DINPUT_3K_HVENABLE_FLAG_ADDR    8
-#define DINPUT_ARMBEAMS_FLAG_ADDR       9
-#define DINPUT_CCSPOWER_FLAG_ADDR       10
-#define DINPUT_ARM80KV_FLAG_ADDR        11
-#define DINPUT_1K_VCOMP_FLAG_ADDR       12
-#define DINPUT_1K_ICOMP_FLAG_ADDR       13
-#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   14
-#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   15
-#define DINPUT_20K_VCOMP_FLAG_ADDR      16
-#define DINPUT_20K_ICOMP_FLAG_ADDR      17
-#define DINPUT_3K_VCOMP_FLAG_ADDR       18
-#define DINPUT_3K_ICOMP_FLAG_ADDR       19
+#define DINPUT_NOMOP_FLAG_ADDR          6
+#define DINPUT_3K_HVENABLE_FLAG_ADDR    7
+#define DINPUT_ARMBEAMS_FLAG_ADDR       8
+#define DINPUT_CCSPOWER_FLAG_ADDR       9
+#define DINPUT_ARM80KV_FLAG_ADDR        10
+#define DINPUT_1K_VCOMP_FLAG_ADDR       11
+#define DINPUT_1K_ICOMP_FLAG_ADDR       12
+#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   13
+#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   14
+#define DINPUT_20K_VCOMP_FLAG_ADDR      15
+#define DINPUT_20K_ICOMP_FLAG_ADDR      16
+#define DINPUT_3K_VCOMP_FLAG_ADDR       17
+#define DINPUT_3K_ICOMP_FLAG_ADDR       18
 
 // note: when changing this map, update these register counts:
-#define IREG_COUNT              4
-#define DINPUT_COUNT            20
+#define IREG_COUNT              5
+#define DINPUT_COUNT            19
 //============================================================
 //============================================================
 
@@ -70,9 +70,11 @@ const int ps_id = 1;
 /**
  * System Constants
  */
-#define RESET_THRESHOLD_V       0.3                 // V
-#define RESET_THRESHOLD_I       0.3                 // mA
-#define VOLTS_PER_COUNT         0.1875F / 1000.0F   // correct with GAIN_TWO_THIRDS
+#define RESET_ENTER_V       0.3                     // V
+#define RESET_ENTER_I       0.3                     // mA
+#define RESET_EXIT_V        1.0                     // V
+#define RESET_EXIT_I        1.0                     // mA
+#define VOLTS_PER_COUNT     0.1875F / 1000.0F       // correct with GAIN_TWO_THIRDS
 
 /**
  * Pin assignments
@@ -170,16 +172,19 @@ void checkMatsusadaResetState() {
     bool hvEnabled = digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
     bool highSetV = programmedHV_V > 1.0;
 
-    if (!resetState && hvEnabled && highSetV &&
+    // enter reset state if both voltage and current below tresholds while HV is set above 1
+    if (!resetState1kV && hvEnabled && highSetV &&
         measuredHV_V < RESET_ENTER_V && measuredI_mA < RESET_ENTER_I) {
-        resetState = true;
+        resetState1kV = true;
         digitalWrite(RESET_LED_PIN, HIGH);
-        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 1);
+        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_1KV_ADDR, 1);
     }
-    else if (resetState && (hvEnabled && measuredHV_V > RESET_EXIT_V && measuredI_mA > RESET_EXIT_I)) {
-        resetState = false;
+
+    // on recover, we only wait for current OR voltage to be above treshold
+    else if (resetState1kV && (hvEnabled && (measuredHV_V > RESET_EXIT_V || measuredI_mA > RESET_EXIT_I))) {
+        resetState1kV = false;
         digitalWrite(RESET_LED_PIN, LOW);
-        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_ADDR, 0);
+        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_1KV_ADDR, 0);
     }
 }
 
@@ -189,16 +194,16 @@ void checkMatsusadaResetState() {
  */
 void check3KVResetState(bool nomop, bool overcurrent, bool undervoltage) {
     // on falling edge of nomop, check V-comparator
-    if (preNomOpState && !nomop && undervoltage) {
+    if (prevNomOpState && !nomop && undervoltage) {
         resetState3kV++;
         ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
     } else if (overcurrent) {
         resetState3kV++;
-        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_3KV_ADDR, resetState3kV);
+        ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
     } else if (!prevNomOpState && nomop) {
         // on rising edge of nomop, clear reset state
         resetState3kV = 0;
-        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_3KV_ADDR, resetState3kV);
+        ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
     }
 }
 
@@ -276,7 +281,9 @@ bool read_value()
         bool undervoltage = digitalRead(FLAG_3K_VCOMP_PIN); // 3kV undervoltage
 
         // check 3kV reset state
-        check3KVResetState(nomop, overcurrent);
+        check3KVResetState(nomop, overcurrent, undervoltage);
+        // update previous nom op 
+        prevNomOpState = nomop;
 
         // other flags --> likely just for logging purposes on dashboard
         ModbusRTUServer.discreteInputWrite(DINPUT_3K_HVENABLE_FLAG_ADDR, digitalRead(FLAG_3K_HVENABLE_PIN));
