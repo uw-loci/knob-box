@@ -282,18 +282,18 @@ static inline void step() {
   sample_inputs(inputSnapshot);
 
   // Debounce swithces and buttons inputs
-  const uint8_t switchesDebounced = debounce_switches(inputSnapshot.switchesAssertPortB);
-
+  inputSnapshot.switchesAssertPortB = debounce_switches(inputSnapshot.switchesAssertPortB);
+  
   const bool resetButtonDb   = debounce_reset_button(inputSnapshot.resetAsserted);
   const bool resetButtonEdge = resetButtonDb && !prevResetButtonDb;
 
   prevResetButtonDb = resetButtonDb;
 
   // Switch states (debounced, asserted=1)
-  const bool sw_3kv_enable = (switchesDebounced & _BV(PB4)) != 0; // D10
-  const bool sw_arm_beams  = (switchesDebounced & _BV(PB5)) != 0; // D11
-  const bool sw_ccs_allow  = (switchesDebounced & _BV(PB6)) != 0; // D12
-  const bool sw_arm_80kv   = (switchesDebounced & _BV(PB7)) != 0; // D13
+  const bool sw_3kv_enable = (inputSnapshot.switchesAssertPortB & _BV(PB4)) != 0; // D10
+  const bool sw_arm_beams  = (inputSnapshot.switchesAssertPortB & _BV(PB5)) != 0; // D11
+  const bool sw_ccs_allow  = (inputSnapshot.switchesAssertPortB & _BV(PB6)) != 0; // D12
+  const bool sw_arm_80kv   = (inputSnapshot.switchesAssertPortB & _BV(PB7)) != 0; // D13
 
   // Outputs, all off by default
   Output outputSnapshot = {false, false, false, false};
