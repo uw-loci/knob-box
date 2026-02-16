@@ -113,14 +113,6 @@ Two 8‑bit ports are dedicated to flag outputs:
 | CCS Power Allow Switch | D28 | PA6 | `prevFlagsSwitches` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
 | Arm 80kV Switch | D29 | PA7 | `prevFlagsSwitches` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
 
-> **Code reality (important):** `prevFlagsSwitches` is latched from **raw sampled switches**, not the debounced switch values:
->
-> ```cpp
-> prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCHES_PORTB);
-> ```
->
-> The file header comment says “latched debounced switches”, but the implementation latches **raw** (potentially bouncy) assertions. If you want flags to be debounced, latch `switchesDebounced` instead.
-
 ### PORTC (D30–D37): latched comparator fault events
 `PORTC` reflects `prevFlagsComparators`, a sticky OR of `PINL` since last ACK toggle:
 
