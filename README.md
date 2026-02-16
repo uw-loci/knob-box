@@ -414,10 +414,8 @@ flowchart TD
 
 ## Known discrepancies / logic notes (from code review)
 
-1. **Switch event flags are NOT debounced.**  
-   The header comment claims “latched debounced switches”, but `write_flags()` latches **raw sampled switch assertions**. If you see spurious latched switch flags, this is the likely cause.
 
-2. **Potential 3kV “one-cycle pulse” when timer expires while fault persists.**  
+1. **Potential 3kV “one-cycle pulse” when timer expires while fault persists.**  
    In `STATE_3KV_TIMER`, when the timer expires the firmware sets `currentState = INTERLOCK` and proceeds to output assignment **without re-checking** `MASK_COMP_3KV_I` that same step.  
    If the 3kV overcurrent fault (PL0) remains asserted at that moment and the 3kV enable switch is asserted, then for **one `step()` iteration** the `INTERLOCK` output assignment can re-enable 3kV before the next iteration re-enters the timer state.
 
@@ -425,8 +423,7 @@ flowchart TD
    - Keep the state in `STATE_3KV_TIMER` until the 3kV fault clears (in addition to time expiring).
    - Or, in `STATE_INTERLOCK` output assignment, force 3kV OFF when `MASK_COMP_3KV_I` is high.
    - Or, after changing `currentState` to `INTERLOCK` inside the timer state, immediately re-run/inline the interlock 3kI check before output assignment.
-
-3. **Debounce time depends on loop rate.**  
+2. **Debounce time depends on loop rate.**  
    `DEBOUNCE_BITS` is a sample count; any change in loop timing changes debounce time.
 ---
 
