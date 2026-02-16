@@ -1,16 +1,14 @@
 # Knob Box — Logic Arduino (Mega 2560 Rev 3)
 
-This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of the Knob Box system. It runs a small safety-oriented state machine that:
+This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of the Knob Box system. It runs a quick response state machine that:
 
-- Reads **interlock comparators** (open-drain, fail-safe wiring) and **front-panel switches**
+- Reads **interlock comparators** (open-drain) and **front-panel switches**
 - Controls three hardware enables:
   - **CCS Enable** (A0 / PF0)
   - **Beam Enable** (A1 / PF1)
   - **3kV Enable** (A2 / PF2)
-- Publishes **status + event flags** on two 8‑bit ports for a second Arduino (dashboard/test harness) to read.
-- Uses an **ACK toggle input** to clear latched event flags.
-
-The code uses **direct AVR register access** (DDRx/PORTx/PINx) for determinism and speed.
+- Publishes **status + event flags** on two 8‑bit ports for the 3kV Monitoring Arduino to read.
+- Uses an **ACK toggle input** to clear latched event flags after 3kV reads flags.
 
 ---
 
@@ -21,7 +19,7 @@ The code uses **direct AVR register access** (DDRx/PORTx/PINx) for determinism a
 Comparator lines are treated as open-drain/open-collector:
 
 - **SAFE:** comparator drives **LOW**
-- **FAULT / INTERLOCK:** comparator is **Hi‑Z**, Arduino pullup makes input read **HIGH**
+- **FAULT / INTERLOCK:** comparator is **Hi‑Z**, Logic Arduino pullup makes input read **HIGH**
 - **Disconnected wire:** reads **HIGH** → treated as **FAULT**
 
 **In firmware:** comparator bits are read from `PINL` and **not inverted**.  
@@ -39,12 +37,12 @@ static constexpr uint32_t TIMER_3KV_MS = 100;
 ```
 3kV lockout duration (ms) after a 3kV trip.
 
-### `DEBOUNCE_BITS` (default: `6`)
+### `DEBOUNCE_BITS`
 ```cpp
-static constexpr uint8_t  DEBOUNCE_BITS = 6; // 1..31
+static constexpr uint8_t  DEBOUNCE_BITS = 16; // 1..31
 static constexpr uint32_t MASK_DEBOUNCE = (uint32_t)((1u << DEBOUNCE_BITS) - 1u);
 ```
-Debounce length in **number of consecutive samples** (not milliseconds). The loop runs continuously; the effective time depends on loop rate.
+Debounce length in **number of consecutive samples** (sample occurs every ~25 us).
 
 > **Important:** `DEBOUNCE_BITS` must remain in `1..31`. Values outside that range can produce undefined behavior due to shifting.
 
@@ -54,15 +52,22 @@ Debounce length in **number of consecutive samples** (not milliseconds). The loo
 
 ### Inputs
 
-| Signal | Arduino Pin | AVR Port/Bit | Electrical | Polarity in code |
-|---|---:|---|---|---|
-| 3kV enable switch | D10 | PB4 | pullup enabled | **asserted = 1** |
-| Arm beams switch | D11 | PB5 | pullup enabled | **asserted = 1** |
-| CCS allow switch | D12 | PB6 | pullup enabled | **asserted = 1** |
-| Arm 80kV switch | D13 | PB7 | pullup enabled | **asserted = 1** |
-| ACK (toggle-to-clear) | D14 | PJ1 | pullup enabled | **high = 1** |
-| Reset button | D15 | PJ0 | pullup enabled | **pressed = 1** |
-| Comparators (8 lines) | D42–D49 | PL7..PL0 | pullups enabled | **FAULT = 1** |
+| Signal | Arduino Pin | AVR Port/Bit | Pullup | Polarity in Code | Notes |
+|---|---:|---|---|---|---|
+| 3kV HV Output Enable Switch | D10 | PB4 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| Arm Beams Switch | D11 | PB5 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| CCS Power Allow Switch | D12 | PB6 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| Arm 80kV Switch | D13 | PB7 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| ACK (toggle-to-clear) | D14 | PJ1 | Yes | high = 1 | Any level change clears latched flags |
+| Reset Button | D15 | PJ0 | Yes | pressed = 1 | Active-low at pin; debounced and rising-edge detected |
+| +1kV V Comparator | D42 | PL7 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| +1kV I Comparator | D43 | PL6 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| -1kV V Comparator | D44 | PL5 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| -1kV I Comparator | D45 | PL4 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 20kV V Comparator | D46 | PL3 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 20kV I Comparator | D47 | PL2 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 3kV V Comparator | D48 | PL1 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 3kV I Comparator | D49 | PL0 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
 
 #### Switch and reset inversion
 Switches and reset are physically **active-low** at the pin (pulled high, asserted by pulling to GND). Sampling converts them to **asserted = 1**:
@@ -84,15 +89,10 @@ s.ackLevel = (PINJ & MASK_ACK) != 0;
 
 | Output | Arduino Pin | AVR Port/Bit | Active level | Meaning |
 |---|---:|---|---|---|
-| CCS Enable | A0 | PF0 | HIGH enables | `out.ccsPowerEnable` |
-| Beam Enable | A1 | PF1 | HIGH enables | `out.armBeamsEnable` |
-| 3kV Enable | A2 | PF2 | HIGH enables | `out.enable3kV` |
-| Interlock LED | D16 | PH1 | HIGH drives LED | **ON when NOT in NOM_OP** |
-
-LED logic (as implemented):
-- `out.nomOp == true` → LED **OFF**
-- otherwise → LED **ON**
-
+| CCS Enable | A0 | PF0 | HIGH enables CCS Power | `out.ccsPowerEnable` |
+| Beam Enable | A1 | PF1 | HIGH enables Beams via BCON | `out.armBeamsEnable` |
+| 3kV Enable | A2 | PF2 | HIGH enables HV Output | `out.enable3kV` |
+| Interlock LED | D16 | PH1 | HIGH drives LED | ON when NOT in NOM_OP |
 ---
 
 ## Flag outputs (status + latched events)
@@ -102,13 +102,16 @@ Two 8‑bit ports are dedicated to flag outputs:
 ### PORTA (D22–D29): live outputs + NomOp + latched switch events
 `PORTA` is rebuilt and written every `step()`:
 
-| PORTA bit | Arduino Pin | Source | Latched? | Meaning |
-|---|---:|---|---|---|
-| PA0 | D22 | `out.ccsPowerEnable` | No | mirrors current CCS output |
-| PA1 | D23 | `out.armBeamsEnable` | No | mirrors current Beam output |
-| PA2 | D24 | `out.enable3kV` | No | mirrors current 3kV output |
-| PA3 | D25 | `out.nomOp` | No | 1 = in NOM_OP |
-| PA4–PA7 | D26–D29 | `prevFlagsSwitches` bits 4–7 | Yes | switch asserted at least once since last ACK toggle |
+| Flag Name | Flag Pin | AVR Port/Bit | Source | Latched? | Meaning |
+|---|---:|---|---|---|---|
+| CCS Power Enable | D22 | PA0 | `out.ccsPowerEnable` | No | Mirrors current CCS enable output |
+| Beam Enable | D23 | PA1 | `out.armBeamsEnable` | No | Mirrors current Beam enable output |
+| 3kV HV Enable | D24 | PA2 | `out.enable3kV` | No | Mirrors current 3kV enable output |
+| Nom Op | D25 | PA3 | `out.nomOp` | No | 1 = in `STATE_NOM_OP` |
+| 3kV HV Output Enable Switch | D26 | PA4 | `prevFlagsSwitches` (PB4) | Yes | Switch asserted at least once since last ACK toggle |
+| Arm Beams Switch | D27 | PA5 | `prevFlagsSwitches` (PB5) | Yes | Switch asserted at least once since last ACK toggle |
+| CCS Power Allow Switch | D28 | PA6 | `prevFlagsSwitches` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
+| Arm 80kV Switch | D29 | PA7 | `prevFlagsSwitches` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
 
 > **Code reality (important):** `prevFlagsSwitches` is latched from **raw sampled switches**, not the debounced switch values:
 >
@@ -128,18 +131,18 @@ PORTC = prevFlagsComparators;
 
 **Bit-ordering note:** `PINL` bits are copied into `PORTC` bits directly. Physical Arduino pin numbering on PORTC is reversed relative to bit indices:
 
-| Bit index | PORTC bit | Arduino pin |
-|---:|---|---:|
-| 0 | PC0 | D37 |
-| 1 | PC1 | D36 |
-| 2 | PC2 | D35 |
-| 3 | PC3 | D34 |
-| 4 | PC4 | D33 |
-| 5 | PC5 | D32 |
-| 6 | PC6 | D31 |
-| 7 | PC7 | D30 |
+|> PORTC contains latched comparator fault events (sticky OR since last ACK toggle).
 
-Comparator inputs are `PINL` (`PL0..PL7`) which correspond to Arduino `D49..D42` (PL0=D49, PL7=D42). If you need a one-to-one map for your harness, map by **bit position**, not by Arduino “Dn” numbers.
+| Comparator Name | Comparator Input Pin | Comparator AVR Port/Bit | Flag Pin | Flag AVR Port/Bit | Latched? | Meaning |
+|---|---:|---|---:|---|---|---|
+| +1kV V Comparator | D42 | PL7 | D30 | PC7 | Yes | 1 if this comparator faulted since last ACK toggle |
+| +1kV I Comparator | D43 | PL6 | D31 | PC6 | Yes | 1 if this comparator faulted since last ACK toggle |
+| -1kV V Comparator | D44 | PL5 | D32 | PC5 | Yes | 1 if this comparator faulted since last ACK toggle |
+| -1kV I Comparator | D45 | PL4 | D33 | PC4 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 20kV V Comparator | D46 | PL3 | D34 | PC3 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 20kV I Comparator | D47 | PL2 | D35 | PC2 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 3kV V Comparator | D48 | PL1 | D36 | PC1 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 3kV I Comparator | D49 | PL0 | D37 | PC0 | Yes | 1 if this comparator faulted since last ACK toggle |
 
 ---
 
