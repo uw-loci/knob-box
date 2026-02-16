@@ -327,7 +327,7 @@ Each `loop()` iteration calls `step()`:
 
 flowchart TD
     START[Power up or reset]
-    START ==> INIT["Hardware Initialization\nio_init_registers()"]
+    START ==> INIT["Hardware Initialization io_init_registers()"]
     INIT ==> DEFAULT["Set default outputs, sample initial inputs"]
     DEFAULT ==> LOOP["step()"]
 
@@ -387,9 +387,9 @@ flowchart TD
     OUT_STATE ===> OUT_NOMOP_STATE[STATE_NOM_OP]
     OUT_STATE ===> OUT_TIMER_STATE[STATE_3KV_TIMER]
 
-    OUT_INTERLOCK_STATE ==> OUT_INTERLOCK[Outputs\nCCS = OFF\nBeam = OFF\n3kV = 3kV enable switch]
-    OUT_NOMOP_STATE ==> OUT_NOMOP[Outputs\nCCS = CCS allow switch\nBeam = Arm Beams switch\n3kV = 3kV enable switch]
-    OUT_TIMER_STATE ==> OUT_TIMER[Outputs\nCCS = OFF\nBeam = OFF\n3kV = OFF]
+    OUT_INTERLOCK_STATE ==> OUT_INTERLOCK[Outputs CCS = OFF Beam = OFF 3kV = 3kV enable switch]
+    OUT_NOMOP_STATE ==> OUT_NOMOP[Outputs CCS = CCS allow switch Beam = Arm Beams switch 3kV = 3kV enable switch]
+    OUT_TIMER_STATE ==> OUT_TIMER[Outputs CCS = OFF Beam = OFF 3kV = OFF]
 
     OUT_INTERLOCK ==> WRITE_OUTPUTS[Write Outputs]
     OUT_NOMOP ==> WRITE_OUTPUTS
