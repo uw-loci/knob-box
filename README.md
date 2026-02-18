@@ -364,7 +364,7 @@ flowchart TD
     N_STAY_N ==> OUT_STATE
 
     STATE ===> TIMER[STATE_3KV_TIMER]
-    TIMER ==> T_EXPIRE{{"millis() - timerEnterMs >= 100 ms"}}
+    TIMER ==> T_EXPIRE{{"No 3kV I fault AND millis() - timerEnterMs >= 100 ms"}}
     T_EXPIRE ==> T_EXP_T[True]
     T_EXPIRE ==> T_EXP_F[False]
     T_EXP_T ===> T_TO_INTERLOCK[Enter STATE_INTERLOCK]
