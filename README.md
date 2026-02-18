@@ -38,9 +38,11 @@ Firmware for an **Arduino Mega 2560** that
 
 Install via the Arduino Library Manager or add to `platformio.ini`:
 
-* **arduino‑timer** — <https://github.com/contrem/arduino-timer>  
+* **arduino‑timer** — <https://github.com/contrem/arduino-timer>
 * **Adafruit ADS1X15**  
 * **LiquidCrystal_I2C**
+* **ArduinoRS485**
+* **ArduinoModbus**
 
 Target board: **Arduino Mega 2560** (ATmega2560).
 
