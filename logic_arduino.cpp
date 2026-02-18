@@ -334,7 +334,9 @@ static inline void step() {
     } break;
 
     case State::STATE_3KV_TIMER: {
-      if ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS) {
+      // Leave timer state if 3kV I comparator is low, and it's been longer than the timer duration since we entered
+      if (((inputSnapshot.comparators & MASK_COMP_3KV_I) == 0)  && 
+              ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS)) {
         currentState = State::STATE_INTERLOCK;
       }
     } break;
