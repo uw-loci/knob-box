@@ -1,8 +1,7 @@
-/* TODOs:
-    - matsusada reset logic --> difference between set and measured? or current approach?
-
-    - 3kV reset logic --> implemented a counter of overcurrent events while in reset state
-*/
+/**
+ * High-Voltage Power Supply Monitoring Firmware.
+ * Please set the power supply identifier before using.
+ */
 
 #include <arduino-timer.h>
 #include <Wire.h>
@@ -11,6 +10,15 @@
 #include <Adafruit_ADS1X15.h>
 #include <ArduinoRS485.h>
 #include <ArduinoModbus.h>
+
+/**
+ * POWER SUPPLY IDENTIFIER
+ *      - 1: -1kV Matsusada
+ *      - 2: +1kV Matsusada
+ *      - 3: +20kV Bertan
+ *      - 4: +3kV Bertan
+ */
+const int ps_id = 1;
 
 //============= MODBUS MAP ==================================
 //===========================================================
@@ -57,15 +65,6 @@ Discrete Inputs (Function Code 02)
 #define DINPUT_COUNT            19
 //============================================================
 //============================================================
-
-/**
- * GLOBAL MONITORING ARDUINO ID
- *      - 1: -1kV Matsusada
- *      - 2: +1kV Matsusada
- *      - 3: +20kV Bertan
- *      - 4: +3kV Bertan
- */
-const int ps_id = 1;
 
 /**
  * System Constants
@@ -438,23 +437,35 @@ void setup()
     // Configure HVPSU specs
     switch (ps_id) {
         case 1: // -1kV Matsusada
+
+            Serial.println("Configured for -1kV Matsusada");
+
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
         case 2: // +1kV Matsusada
+
+            Serial.println("Configured for +1kV Matsusada");
+
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
         case 3: // +20kV Bertan
+
+            Serial.println("Configured for +20kV Bertan");
+
             ratedHV_V = 20000.0;
             ratedI_mA = 1.0;
             break;
 
         case 4: // +3kV Bertan
+
+            Serial.println("Configured for +3kV Bertan");
+
             ratedHV_V = 3000.0;
             ratedI_mA = 10.0;
 
