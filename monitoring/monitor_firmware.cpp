@@ -136,9 +136,10 @@ LiquidCrystal_I2C   lcd(0x27, 20, 4);
 /**
  * External ADC channel assignments
  */
-#define CH_IMON 0
-#define CH_VMON 1
-#define CH_VSET 2
+
+#define CH_VSET 0
+#define CH_IMON 1
+#define CH_VMON 2
 
 /**
  * Helper to round and clamp values before sending over RS-485.
@@ -319,13 +320,18 @@ bool display_value()
     dtostrf(measuredI_mA, 6, 3, measuredI_buf);
     dtostrf(thresholdI_mA, 3, 1, thresholdI_buf);
 
+    // make voltage values printable -> convert from float to string
+    dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
+    dtostrf((measuredHV_V / 1000.0), 5, 2, measuredHV_buf);
+    dtostrf((thresholdHV_V / 1000.0), 4, 1, thresholdHV_buf);
+
     switch(ps_id) {
         case 1: // -1kV Matsusada
-            snprintf(buffer, 21 * sizeof(char), "Set V:   -%4dV     ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   -%4dV     ", programmedHV_buf);
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  -%4dV     ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  -%4dV     ", measuredHV_buf);
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
@@ -333,18 +339,18 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", thresholdI_buf, thresholdHV_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%4dV  ", thresholdI_buf, thresholdHV_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
             break;
         
         case 2: // 1kV Matsusada
-            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", programmedHV_buf);
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", measuredHV_buf);
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
@@ -352,7 +358,7 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -360,10 +366,7 @@ bool display_value()
 
         case 3: // +20kV Bertan
 
-            // make voltage values printable -> convert from float to string
-            dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
-            dtostrf((measuredHV_V / 1000.0), 5, 2, measuredHV_buf);
-            dtostrf((thresholdHV_V / 1000.0), 4, 1, thresholdHV_buf);
+            
 
             snprintf(buffer, 21 * sizeof(char), "Set V:   +%skV  ", programmedHV_buf);
             lcd.setCursor(0,0);
@@ -384,11 +387,11 @@ bool display_value()
             break;
 
         case 4: // +3kV Bertan
-            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", int(programmedHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%4dV      ", programmedHV_buf);
             lcd.setCursor(0,0);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", int(measuredHV_V));
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%4dV      ", measuredHV_buf);
             lcd.setCursor(0,1);
             lcd.print(buffer);
 
@@ -396,7 +399,7 @@ bool display_value()
             lcd.setCursor(0,2);
             lcd.print(buffer);
 
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_V);
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %4dV  ", thresholdI_buf, thresholdHV_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
