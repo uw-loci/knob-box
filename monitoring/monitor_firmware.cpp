@@ -82,9 +82,9 @@ Discrete Inputs (Function Code 02)
 #define V_THRESH_PIN                    A1      // Voltage Comparator threshold voltage
 #define RESET_LED_PIN                   6       // Yellow Matsusada Reset Indicator Light
 #define HV_ENABLE_SWITCH_PIN            7       // Active low (shorted to D10)
+#define ARM_80KV_SWITCH_PIN             8       // Active low
 #define ARM_BEAMS_SWITCH_PIN            11      // Active low
 #define CCS_POWER_ALLOW_SWITCH_PIN      12      // Active Low
-#define ARM_80KV_SWITCH_PIN             13      // Active low
 #define RS485_TX_PIN                    18
 #define RS485_DIR_PIN                   17      // low = receive mode
 #define FLAGS_ACK_PIN                   14      // ack pin to Logic Arduino
