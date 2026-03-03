@@ -8,13 +8,12 @@
 #include <avr/wdt.h>
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_ADS1X15.h>
-#include <ArduinoRS485.h>
-#include <ArduinoModbus.h>
+#include <ModbusRtu.h>
 
 /**
  * POWER SUPPLY IDENTIFIER
- *      - 1: -1kV Matsusada
- *      - 2: +1kV Matsusada
+ *      - 1: +1kV Matsusada
+ *      - 2: -1kV Matsusada
  *      - 3: +20kV Bertan
  *      - 4: +3kV Bertan
  */
@@ -32,37 +31,39 @@ Input Registers (Function Code 04)
 #define IREG_3KV_RESET_COUNT_ADDR   4   // count of reset events for 3kV Bertan
 
 /*
-Discrete Inputs (Function Code 02)
+"Discrete Inputs" (really also input registers)
+TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 */
-#define DINPUT_HVENABLE_ADDR            0
+#define DINPUT_HVENABLE_ADDR            5
 // Just for matsusadas
-#define DINPUT_RESET_STATE_1KV_ADDR     1
+#define DINPUT_RESET_STATE_1KV_ADDR     6
 // Just for 3kV Bertan
 
 // (raw switch states)
-#define DINPUT_ARM80KV_ADDR             2
+#define DINPUT_ARM80KV_ADDR             7
 // (logic arduino outputs)
-#define DINPUT_ARMBEAMS_ADDR            3
-#define DINPUT_CCSPOWER_ADDR            4
-#define DINPUT_3KV_ENABLE_ADDR          5 
+#define DINPUT_ARMBEAMS_ADDR            8
+#define DINPUT_CCSPOWER_ADDR            9
+#define DINPUT_3KV_ENABLE_ADDR          10 
 // (flags)
-#define DINPUT_NOMOP_FLAG_ADDR          6
-#define DINPUT_3K_HVENABLE_FLAG_ADDR    7
-#define DINPUT_ARMBEAMS_FLAG_ADDR       8
-#define DINPUT_CCSPOWER_FLAG_ADDR       9
-#define DINPUT_ARM80KV_FLAG_ADDR        10
-#define DINPUT_1K_VCOMP_FLAG_ADDR       11
-#define DINPUT_1K_ICOMP_FLAG_ADDR       12
-#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   13
-#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   14
-#define DINPUT_20K_VCOMP_FLAG_ADDR      15
-#define DINPUT_20K_ICOMP_FLAG_ADDR      16
-#define DINPUT_3K_VCOMP_FLAG_ADDR       17
-#define DINPUT_3K_ICOMP_FLAG_ADDR       18
+#define DINPUT_NOMOP_FLAG_ADDR          11
+#define DINPUT_3K_HVENABLE_FLAG_ADDR    12
+#define DINPUT_ARMBEAMS_FLAG_ADDR       13
+#define DINPUT_CCSPOWER_FLAG_ADDR       14
+#define DINPUT_ARM80KV_FLAG_ADDR        15
+#define DINPUT_1K_VCOMP_FLAG_ADDR       16
+#define DINPUT_1K_ICOMP_FLAG_ADDR       17
+#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   18
+#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   19
+#define DINPUT_20K_VCOMP_FLAG_ADDR      20
+#define DINPUT_20K_ICOMP_FLAG_ADDR      21
+#define DINPUT_3K_VCOMP_FLAG_ADDR       22
+#define DINPUT_3K_ICOMP_FLAG_ADDR       23
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              5
 #define DINPUT_COUNT            19
+#define TOTAL_REG_COUNT         (IREG_COUNT + DINPUT_COUNT)
 //============================================================
 //============================================================
 
@@ -132,6 +133,8 @@ int                 resetState3kV = 0;          // count of overcurrent events w
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
+Modbus slave(ps_id, Serial1, RS485_DIR_PIN);
+uint16_t            modbus_regs[IREG_COUNT+DINPUT_COUNT]; // modbus register storage (input registers followed by discrete inputs)
 
 /**
  * External ADC channel assignments
@@ -177,14 +180,14 @@ void checkMatsusadaResetState() {
         measuredHV_V < RESET_ENTER_V && measuredI_mA < RESET_ENTER_I) {
         resetState1kV = true;
         digitalWrite(RESET_LED_PIN, HIGH);
-        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_1KV_ADDR, 1);
+        modbus_regs[DINPUT_RESET_STATE_1KV_ADDR] = 1;
     }
 
     // on recover, we only wait for current OR voltage to be above treshold
     else if (resetState1kV && (hvEnabled && (measuredHV_V > RESET_EXIT_V || measuredI_mA > RESET_EXIT_I))) {
         resetState1kV = false;
         digitalWrite(RESET_LED_PIN, LOW);
-        ModbusRTUServer.discreteInputWrite(DINPUT_RESET_STATE_1KV_ADDR, 0);
+        modbus_regs[DINPUT_RESET_STATE_1KV_ADDR] = 0;
     }
 }
 
@@ -196,14 +199,14 @@ void check3KVResetState(bool nomop, bool overcurrent, bool undervoltage) {
     // on falling edge of nomop, check V-comparator
     if (prevNomOpState && !nomop && undervoltage) {
         resetState3kV++;
-        ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
+        modbus_regs[IREG_3KV_RESET_COUNT_ADDR] = resetState3kV;
     } else if (overcurrent) {
         resetState3kV++;
-        ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
+        modbus_regs[IREG_3KV_RESET_COUNT_ADDR] = resetState3kV;
     } else if (!prevNomOpState && nomop) {
         // on rising edge of nomop, clear reset state
         resetState3kV = 0;
-        ModbusRTUServer.inputRegisterWrite(IREG_3KV_RESET_COUNT_ADDR, resetState3kV);
+        modbus_regs[IREG_3KV_RESET_COUNT_ADDR] = resetState3kV;
     }
 }
 
@@ -235,9 +238,9 @@ bool read_value()
     measuredHV_V = (vmonVolts / 5.0) * ratedHV_V;
     programmedHV_V = (vsetVolts / 5.0) * ratedHV_V;
     // Store in input regs, rounding to the nearest volt and the nearest uA
-    ModbusRTUServer.inputRegisterWrite(IREG_V_SET_ADDR, round_clamp_u16(programmedHV_V));
-    ModbusRTUServer.inputRegisterWrite(IREG_V_READ_ADDR, round_clamp_u16(measuredHV_V));
-    ModbusRTUServer.inputRegisterWrite(IREG_I_READ_ADDR, round_clamp_u16(measuredI_mA * 1000.0f));
+    modbus_regs[IREG_V_SET_ADDR] = round_clamp_u16(programmedHV_V);
+    modbus_regs[IREG_V_READ_ADDR] = round_clamp_u16(measuredHV_V);
+    modbus_regs[IREG_I_READ_ADDR] = round_clamp_u16(measuredI_mA * 1000.0f);
 
     /* 
     Calculate voltage and current thresholds. 
@@ -251,7 +254,7 @@ bool read_value()
     /*
     Read HV Enable switch state and store in RS-485 discrete input.
     */
-    ModbusRTUServer.discreteInputWrite(DINPUT_HVENABLE_ADDR, digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
+    modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
 
     /*
     Check Matsusada reset state.
@@ -268,35 +271,35 @@ bool read_value()
     if (ps_id == 4) { // only for +3kV Bertan
 
         // read switch state of arm 80kV
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_ADDR, digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
+        modbus_regs[DINPUT_ARM80KV_ADDR] = (digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
 
         // read logic arduino outputs
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_ADDR, digitalRead(OUTPUT_ARMBEAMS_PIN) == LOW);
-        ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_ADDR, digitalRead(OUTPUT_CCSPOWER_PIN) == LOW);
-        ModbusRTUServer.discreteInputWrite(DINPUT_3KV_ENABLE_ADDR, digitalRead(OUTPUT_3KV_ENABLE_PIN) == LOW);
+        modbus_regs[DINPUT_ARMBEAMS_ADDR] = (digitalRead(OUTPUT_ARMBEAMS_PIN) == LOW);
+        modbus_regs[DINPUT_CCSPOWER_ADDR] = (digitalRead(OUTPUT_CCSPOWER_PIN) == LOW);
+        modbus_regs[DINPUT_3KV_ENABLE_ADDR] = (digitalRead(OUTPUT_3KV_ENABLE_PIN) == LOW);
 
-        // 'important' flags
+        // "important" flags
         bool nomop = digitalRead(FLAG_NOMOP_PIN);
         bool overcurrent = digitalRead(FLAG_3K_ICOMP_PIN); // 3kV overcurrent
         bool undervoltage = digitalRead(FLAG_3K_VCOMP_PIN); // 3kV undervoltage
 
         // check 3kV reset state
         check3KVResetState(nomop, overcurrent, undervoltage);
-        // update previous nom op 
+        // update previous nom op state
         prevNomOpState = nomop;
 
         // other flags --> likely just for logging purposes on dashboard
-        ModbusRTUServer.discreteInputWrite(DINPUT_3K_HVENABLE_FLAG_ADDR, digitalRead(FLAG_3K_HVENABLE_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARMBEAMS_FLAG_ADDR, digitalRead(FLAG_ARMBEAMS_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_CCSPOWER_FLAG_ADDR, digitalRead(FLAG_CCSPOWER_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_ARM80KV_FLAG_ADDR, digitalRead(FLAG_ARM80KV_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_1K_VCOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_1K_ICOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_VCOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_VCOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_NEG_1K_ICOMP_FLAG_ADDR, digitalRead(FLAG_NEG_1K_ICOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_20K_VCOMP_FLAG_ADDR, digitalRead(FLAG_20K_VCOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_20K_ICOMP_FLAG_ADDR, digitalRead(FLAG_20K_ICOMP_PIN));
-        ModbusRTUServer.discreteInputWrite(DINPUT_3K_VCOMP_FLAG_ADDR, digitalRead(FLAG_3K_VCOMP_PIN));
+        modbus_regs[DINPUT_3K_HVENABLE_FLAG_ADDR] = digitalRead(FLAG_3K_HVENABLE_PIN);
+        modbus_regs[DINPUT_ARMBEAMS_FLAG_ADDR] = digitalRead(FLAG_ARMBEAMS_PIN);
+        modbus_regs[DINPUT_CCSPOWER_FLAG_ADDR] = digitalRead(FLAG_CCSPOWER_PIN);
+        modbus_regs[DINPUT_ARM80KV_FLAG_ADDR] = digitalRead(FLAG_ARM80KV_PIN);
+        modbus_regs[DINPUT_1K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_1K_VCOMP_PIN);
+        modbus_regs[DINPUT_1K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_1K_ICOMP_PIN);
+        modbus_regs[DINPUT_NEG_1K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_NEG_1K_VCOMP_PIN);
+        modbus_regs[DINPUT_NEG_1K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_NEG_1K_ICOMP_PIN);
+        modbus_regs[DINPUT_20K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_20K_VCOMP_PIN);
+        modbus_regs[DINPUT_20K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_20K_ICOMP_PIN);
+        modbus_regs[DINPUT_3K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_3K_VCOMP_PIN);
 
         // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
@@ -321,32 +324,7 @@ bool display_value()
     dtostrf(thresholdI_mA, 3, 1, thresholdI_buf);
 
     switch(ps_id) {
-        case 1: // -1kV Matsusada
-            
-            // make voltage values printable -> convert from float to string
-            dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
-            dtostrf(measuredHV_V, 4, 0, measuredHV_buf);
-            dtostrf(thresholdHV_V, 4, 0, thresholdHV_buf);
-
-            snprintf(buffer, 21 * sizeof(char), "Set V:   -%sV     ", programmedHV_buf);
-            lcd.setCursor(0,0);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  -%sV     ", measuredHV_buf);
-            lcd.setCursor(0,1);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
-            lcd.setCursor(0,2);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%sV  ", thresholdI_buf, thresholdHV_buf);
-            lcd.setCursor(0,3);
-            lcd.print(buffer);
-
-            break;
-        
-        case 2: // 1kV Matsusada
+        case 1: // +1kV Matsusada
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -366,6 +344,31 @@ bool display_value()
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig: %smA %sV  ", thresholdI_buf, thresholdHV_buf);
+            lcd.setCursor(0,3);
+            lcd.print(buffer);
+
+            break;
+        
+        case 2: // -1kV Matsusada
+
+            // make voltage values printable -> convert from float to string
+            dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
+            dtostrf(measuredHV_V, 4, 0, measuredHV_buf);
+            dtostrf(thresholdHV_V, 4, 0, thresholdHV_buf);
+
+            snprintf(buffer, 21 * sizeof(char), "Set V:   -%sV     ", programmedHV_buf);
+            lcd.setCursor(0,0);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  -%sV     ", measuredHV_buf);
+            lcd.setCursor(0,1);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
+            lcd.setCursor(0,2);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA -%sV  ", thresholdI_buf, thresholdHV_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
@@ -455,18 +458,18 @@ void setup()
 
     // Configure HVPSU specs
     switch (ps_id) {
-        case 1: // -1kV Matsusada
+        case 1: // +1kV Matsusada
 
-            Serial.println("Configured for -1kV Matsusada");
+            Serial.println("Configured for +1kV Matsusada");
 
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
-        case 2: // +1kV Matsusada
+        case 2: // -1kV Matsusada
 
-            Serial.println("Configured for +1kV Matsusada");
+            Serial.println("Configured for -1kV Matsusada");
 
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
@@ -511,16 +514,10 @@ void setup()
             break;
     }
 
-    // Setup RS-485
-    RS485.setPins(RS485_TX_PIN, RS485_DIR_PIN, RS485_DIR_PIN); // DE and RE pins shorted together
-    RS485.begin(9600);
-    if (!ModbusRTUServer.begin(ps_id, 9600)) { // address of slave lines up with ps_id
-        Serial.println("Failed to start Modbus RTU Server");
-        // while (1);
-    }
-    ModbusRTUServer.configureInputRegisters(0, IREG_COUNT);
-    ModbusRTUServer.configureDiscreteInputs(0, DINPUT_COUNT);
-    ModbusRTUServer.inputRegisterWrite(IREG_HEALTH_ADDR, (uint16_t)ps_id); // TODO
+    Serial.println("Initializing Modbus RTU Server on Serial1...");
+    Serial1.begin(9600);
+    slave.start();
+    Serial.println("Modbus RTU Server started.");
 
     timer.every(150, read_value);
     timer.every(200, display_value);
@@ -534,7 +531,7 @@ void loop()
 {
   wdt_reset(); //Feed dog
 
-  ModbusRTUServer.poll(); // poll for requests from dashboard
+  slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
 
   timer.tick();
 }
