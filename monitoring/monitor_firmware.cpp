@@ -254,8 +254,13 @@ bool read_value()
     /*
     Read HV Enable switch state and store in RS-485 discrete input.
     */
-    modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
-
+    if (pd_id == 3) {
+        // for +20kv Bertan, signal is active-high
+        modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH);
+    } else {
+        modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
+    }
+    
     /*
     Check Matsusada reset state.
     */
