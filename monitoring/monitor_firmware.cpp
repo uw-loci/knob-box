@@ -254,7 +254,7 @@ bool read_value()
     /*
     Read HV Enable switch state and store in RS-485 discrete input.
     */
-    if (pd_id == 3) {
+    if (ps_id == 3) {
         // for +20kv Bertan, signal is active-high
         modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH);
     } else {
@@ -292,6 +292,8 @@ bool read_value()
         check3KVResetState(nomop, overcurrent, undervoltage);
         // update previous nom op state
         prevNomOpState = nomop;
+
+        modbus_regs[DINPUT_NOMOP_FLAG_ADDR] = nomop;
 
         // other flags --> likely just for logging purposes on dashboard
         modbus_regs[DINPUT_3K_HVENABLE_FLAG_ADDR] = digitalRead(FLAG_3K_HVENABLE_PIN);
@@ -379,32 +381,7 @@ bool display_value()
 
             break;
 
-        case 3: // +3kV Bertan
-
-            // make voltage values printable -> convert from float to string
-            dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
-            dtostrf(measuredHV_V, 4, 0, measuredHV_buf);
-            dtostrf(thresholdHV_V, 4, 0, thresholdHV_buf);
-
-            snprintf(buffer, 21 * sizeof(char), "Set V:   +%sV      ", programmedHV_buf);
-            lcd.setCursor(0,0);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%sV      ", measuredHV_buf);
-            lcd.setCursor(0,1);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
-            lcd.setCursor(0,2);
-            lcd.print(buffer);
-
-            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %sV  ", thresholdI_buf, thresholdHV_buf);
-            lcd.setCursor(0,3);
-            lcd.print(buffer);
-
-            break;
-
-        case 4: // +20kV Bertan
+        case 3: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
@@ -424,6 +401,31 @@ bool display_value()
             lcd.print(buffer);
 
             snprintf(buffer, 21 * sizeof(char), "Trig: %smA %skV ", thresholdI_buf, thresholdHV_buf);
+            lcd.setCursor(0,3);
+            lcd.print(buffer);
+            
+            break;
+
+        case 4: // +3kV Bertan
+
+            // make voltage values printable -> convert from float to string
+            dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
+            dtostrf(measuredHV_V, 4, 0, measuredHV_buf);
+            dtostrf(thresholdHV_V, 4, 0, thresholdHV_buf);
+
+            snprintf(buffer, 21 * sizeof(char), "Set V:   +%sV      ", programmedHV_buf);
+            lcd.setCursor(0,0);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Meas V:  +%sV      ", measuredHV_buf);
+            lcd.setCursor(0,1);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Current: %smA   ", measuredI_buf);
+            lcd.setCursor(0,2);
+            lcd.print(buffer);
+
+            snprintf(buffer, 21 * sizeof(char), "Trig: %smA %sV  ", thresholdI_buf, thresholdHV_buf);
             lcd.setCursor(0,3);
             lcd.print(buffer);
 
