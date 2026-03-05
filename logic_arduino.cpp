@@ -43,6 +43,8 @@
         * D25 NomOp flag: HIGH = In NOM OP  ->  LOW = not NOM OP
         * D26-29 lached debounced switches (D10-13 asserted=1) since last ACK toggle
     - ACK toggle input (D14): any change clears latched interlock faults
+    - ACK echo output (D9): toggles on every observed ACK edge so the monitor Arduino can
+      prove this firmware is alive and still sampling D14
 */
 
 #include <Arduino.h>
@@ -60,7 +62,7 @@ static constexpr uint8_t  DEBOUNCE_BITS = 6;    // Can be set from 1 to 31 (do N
 // Comparators D42-49 => PL7-PL0 (D49=PL0, D42=PL7)
 // Flags out: D22-29 => PA0-PA7, D30-37 => PC7-PC0
 // ACK D14 => PJ1, RESET BUTTON D15 => PJ0
-// LED D16 => PH1
+// ACK echo D9 => PH6, LED D16 => PH1
 // Outputs A0/A1/A2 => PF0/PF1/PF2
 
 // ========================== State Enum ==========================
@@ -85,6 +87,7 @@ static constexpr uint8_t MASK_OUT_CCS   = _BV(PF0); // A0
 static constexpr uint8_t MASK_OUT_BEAM  = _BV(PF1); // A1
 static constexpr uint8_t MASK_OUT_3KV   = _BV(PF2); // A2
 static constexpr uint8_t MASK_INTERLOCK_LED = _BV(PH1); // D16
+static constexpr uint8_t MASK_ACK_ECHO      = _BV(PH6); // D9
 
 // ACK/RESET
 static constexpr uint8_t MASK_ACK       = _BV(PJ1); // D14
@@ -110,6 +113,7 @@ static bool    switchStable[4] = {false, false, false, false};
 static uint32_t resetButtonHist = 0;
 static bool    resetButtonStable = false;
 static bool    prevResetButtonDb = false;
+static bool    ackEchoState = false;
 
 // ========================= Helpers =========================
 
@@ -167,13 +171,14 @@ static inline void io_init_registers() {
   DDRA = 0xFF;
   DDRC = 0xFF;
 
-  // Outputs: A0-A2 (PF0-PF2) and LED PH1
+  // Outputs: A0-A2 (PF0-PF2), ACK echo D9 (PH6), and LED D16 (PH1)
   DDRF |= (MASK_OUT_CCS | MASK_OUT_BEAM | MASK_OUT_3KV);
-  DDRH |= MASK_INTERLOCK_LED;
+  DDRH |= (MASK_INTERLOCK_LED | MASK_ACK_ECHO);
 
   // Initial Outputs:
   PORTF &= (uint8_t)~(MASK_OUT_CCS | MASK_OUT_BEAM | MASK_OUT_3KV); // OFF
-  PORTH |= MASK_INTERLOCK_LED;                                      // ON
+  PORTH &= (uint8_t)~MASK_ACK_ECHO;                                 // ACK echo LOW
+  PORTH |= MASK_INTERLOCK_LED;                                      // LED ON
 
   // Flags default:
   PORTA = 0x00;
@@ -218,6 +223,7 @@ static inline void write_flags(const Sample& sample, const Output& out)
   if (sample.ackLevel != prevAck) {
     prevFlagsComparators = 0;
     prevFlagsSwitches    = 0;
+    ackEchoState = !ackEchoState;   // Flip ack Echo State, written in write_outputs with portH
   }
 
   prevAck = sample.ackLevel;
@@ -245,13 +251,17 @@ static inline void write_flags(const Sample& sample, const Output& out)
 
 static inline void write_outputs(const Output& out) {
 
-  uint8_t porth = prevPORTH;
-  uint8_t portf = prevPORTF & ~(MASK_OUT_CCS | MASK_OUT_BEAM | MASK_OUT_3KV);   // clears CCS, ARM BEAMS, and 3kV EN bits, keeps all others
+  uint8_t porth = prevPORTH & (uint8_t)~(MASK_INTERLOCK_LED | MASK_ACK_ECHO);            // clears interlock LED and ack-echo bits, keeps all others
+  uint8_t portf = prevPORTF & (uint8_t)~(MASK_OUT_CCS | MASK_OUT_BEAM | MASK_OUT_3KV);   // clears CCS, ARM BEAMS, and 3kV EN bits, keeps all others
 
 
   portf |= out.ccsPowerEnable ? MASK_OUT_CCS  : 0;
   portf |= out.armBeamsEnable ? MASK_OUT_BEAM : 0;
   portf |= out.enable3kV      ? MASK_OUT_3KV  : 0;
+
+  if (ackEchoState) {
+    porth |= MASK_ACK_ECHO;
+  }
 
   // LED active-high
   if (out.nomOp) {
@@ -369,6 +379,9 @@ static inline void step() {
   // ---- Flags  ----
   write_flags(inputSnapshot, outputSnapshot);
 
+  // write_flags() must come before write outputs since the ack-back is decided within write_flags...
+  // ...but actually written with the other portH outputs in write_outputs()
+
   // ---- Drive outputs ----
   write_outputs(outputSnapshot);
 }
@@ -388,6 +401,7 @@ void setup() {
   for (uint8_t i = 0; i < 4; i++) switchHist[i] = 0;
   resetButtonHist = 0;
   prevResetButtonDb = false;
+  ackEchoState = false;
 
   // Produce a initial flag image and set outputs
   Sample raw;
