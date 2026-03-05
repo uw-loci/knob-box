@@ -8,7 +8,8 @@ This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of 
   - **Beam Enable** (A1 / PF1)
   - **3kV Enable** (A2 / PF2)
 - Publishes **status + event flags** on two 8‑bit ports for the 3kV Monitoring Arduino to read.
-- Uses an **ACK toggle input** to clear latched event flags after 3kV reads flags.
+- Uses an **ACK toggle input** on **D14 / PJ1** to clear latched event flags after the 3kV Monitoring Arduino reads flags.
+- Drives an **ACK echo / ack-back output** on **D9 / PH6** that toggles on every observed ACK edge so the monitor Arduino can verify that the Logic Arduino is alive.
 
 ---
 
@@ -85,13 +86,14 @@ s.ackLevel = (PINJ & MASK_ACK) != 0;
 
 ---
 
-### Outputs (hardware enables + LED)
+### Outputs (hardware enables + ack-back + LED)
 
 | Output | Arduino Pin | AVR Port/Bit | Active level | Meaning |
 |---|---:|---|---|---|
 | CCS Enable | A0 | PF0 | HIGH enables CCS Power | `out.ccsPowerEnable` |
 | Beam Enable | A1 | PF1 | HIGH enables Beams via BCON | `out.armBeamsEnable` |
 | 3kV Enable | A2 | PF2 | HIGH enables HV Output | `out.enable3kV` |
+| Ack-Back | D9 | PH6 | HIGH when `ackEchoState = 1` | Toggles on each observed ACK edge on D14 so the 3kV mon arduino can verify that the logic arduino is running |
 | Interlock LED | D16 | PH1 | HIGH drives LED | ON when NOT in NOM_OP |
 ---
 
@@ -140,22 +142,36 @@ PORTC = prevFlagsComparators;
 
 ## ACK toggle-to-clear protocol (D14 / PJ1)
 
-`write_flags()` uses an ACK level change to clear flags:
+`write_flags()` uses an ACK level change to clear the latched event flags:
 
 - `prevFlagsComparators` (latched comparator faults)
 - `prevFlagsSwitches` (latched switch assertions)
 
-Any edge (low→high or high→low) clears:
+Any edge (low→high or high→low) clears the latches:
 
 ```cpp
 if (sample.ackLevel != prevAck) {
   prevFlagsComparators = 0;
   prevFlagsSwitches    = 0;
+  ackEchoState = !ackEchoState;
 }
 prevAck = sample.ackLevel;
 ```
 
-This supports a simple dashboard/test harness handshake: **read flags → toggle ACK → flags clear**.
+This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches flags**.
+
+### ACK echo / ack-back protocol (D9 / PH6)
+
+Behavior:
+
+- The 3kV Monitor Arduino toggles the ACK line on **D14 / PJ1** after reading the flag pins.
+- The Logic Arduino samples D14 in `sample_inputs()`.
+- When `write_flags()` detects that `sample.ackLevel != prevAck`, it:
+  - clears the latched flag history, and
+  - toggles `ackEchoState`.
+- `write_outputs()` then drives `ackEchoState` out on **D9 / PH6**.
+
+This gives the 3kV monitor a dedicated proof-of-life signal: if the 3kV monitor toggles ACK and later sees **D9 change state**, then the Logic Arduino observed the ACK edge and is still executing its main loop.
 
 ---
 
@@ -217,8 +233,8 @@ Each `loop()` iteration calls `step()`:
    - debounced switches
    - reset button **edge**
 4. Outputs are assigned from state + debounced switches
-5. Flags are updated (including ACK-cleared latches)
-6. Outputs are driven (register writes only if changed)
+5. Flags are updated (including ACK-cleared latches and any D9 ack-back toggle caused by an ACK edge)
+6. Outputs are driven (register writes only if changed, including D9 ack-back)
 
 ---
 
@@ -260,9 +276,13 @@ Each `loop()` iteration calls `step()`:
 
 ### `STATE_3KV_TIMER` (3kV lockout)
 **Transition:**
-- If elapsed time is at least `TIMER_3KV_MS`, return to `STATE_INTERLOCK`:
+- Return to `STATE_INTERLOCK` only if **both** conditions are true:
+  - 3kV current comparator is no longer faulted (`(comparators & MASK_COMP_3KV_I) == 0`)
+  - elapsed time is at least `TIMER_3KV_MS`
+
   ```cpp
-  if ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS)
+  if (((inputSnapshot.comparators & MASK_COMP_3KV_I) == 0) &&
+      ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS))
       currentState = State::STATE_INTERLOCK;
   ```
 
@@ -402,34 +422,33 @@ flowchart TD
 - `io_init_registers()`:
   - configures DDR registers
   - enables pullups on inputs (switches, ack, reset button, comparators)
-  - forces safe posture on outputs (PF0–PF2 OFF; LED ON)
+  - configures D9 / PH6 as the **ACK echo** output
+  - forces safe posture on outputs (PF0–PF2 OFF; D9 ACK echo LOW; LED ON)
   - initializes flags (PORTA/PORTC) to 0
 - initializes `prevPORTF` / `prevPORTH` to current output registers
 - resets state to `STATE_INTERLOCK`
 - clears debounce histories
-- generates an initial flag image (`write_flags(rawSample, allOffOut)`)
-- re-applies safe outputs (`write_outputs(allOffOut)`)
+- clears `ackEchoState`
+- samples initial inputs
+- generates an initial flag image (`write_flags(raw, out)`)
+- re-applies safe outputs (`write_outputs(out)`)
 
 ---
 
 ## Known discrepancies / logic notes (from code review)
 
-
-1. **Potential 3kV “one-cycle pulse” when timer expires while fault persists.**  
-   In `STATE_3KV_TIMER`, when the timer expires the firmware sets `currentState = INTERLOCK` and proceeds to output assignment **without re-checking** `MASK_COMP_3KV_I` that same step.  
-   If the 3kV overcurrent fault (PL0) remains asserted at that moment and the 3kV enable switch is asserted, then for **one `step()` iteration** the `INTERLOCK` output assignment can re-enable 3kV before the next iteration re-enters the timer state.
-
-   If this matters for your hardware, consider one of these fixes:
-   - Keep the state in `STATE_3KV_TIMER` until the 3kV fault clears (in addition to time expiring).
-   - Or, in `STATE_INTERLOCK` output assignment, force 3kV OFF when `MASK_COMP_3KV_I` is high.
-   - Or, after changing `currentState` to `INTERLOCK` inside the timer state, immediately re-run/inline the interlock 3kI check before output assignment.
-2. **Debounce time depends on loop rate.**  
+1. **Debounce time depends on loop rate.**  
    `DEBOUNCE_BITS` is a sample count; any change in loop timing changes debounce time.
+
+2. **Ack-back may toggle once during startup if D14 is already HIGH at boot.**  
+   `write_flags()` initializes its local `prevAck` to `false` and is called once during `setup()` after sampling D14. If the ACK input is already HIGH on that first call, the code will treat that as an ACK edge, clear the latches, and toggle `ackEchoState` once before normal runtime begins.
+
+   This does not break the ongoing ack-back handshake, but it can create one startup transition on D9 that is caused by initialization rather than by a fresh monitor-issued ACK toggle.
 ---
 
 ## File of record
 
-- `logic_arduino.cpp` — main implementation
+- `logic_arduino_revised.cpp` — main implementation with D9 ack-back support
 - Arduino entry points:
   - `setup()` initializes registers and safe posture
   - `loop()` calls `step()` continuously
