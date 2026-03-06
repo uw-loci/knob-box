@@ -40,7 +40,7 @@ static constexpr uint32_t TIMER_3KV_MS = 100;
 
 ### `DEBOUNCE_BITS`
 ```cpp
-static constexpr uint8_t  DEBOUNCE_BITS = 16; // 1..31
+static constexpr uint8_t  DEBOUNCE_BITS = 6; // 1..31
 static constexpr uint32_t MASK_DEBOUNCE = (uint32_t)((1u << DEBOUNCE_BITS) - 1u);
 ```
 Debounce length in **number of consecutive samples** (sample occurs every ~25 us).
