@@ -1,138 +1,454 @@
-# High‑Voltage Power‑Supply Monitor (aka Knob Box) Firmware for E-Beam System
+# Knob Box — Logic Arduino (Mega 2560 Rev 3)
 
-Firmware for an **Arduino Mega 2560** that  
+This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of the Knob Box system. It runs a quick response state machine that:
 
-* Reads **set‑voltage**, **measured voltage**, and **measured current** from one of three power supplies (Bertan 205B‑3 kV, Bertan 205B‑20 kV, or Matsusada 1 kV / 30 mA).  
-* Displays the values on a 16 × 2 I²C LCD.  
-* Streams the same readings over USB serial.  
-* Runs for days without crashing thanks to: non‑blocking timers, zero heap allocations, an AVR watchdog, and a periodic LCD refresh.
-
----
-
-## Hardware Pin‑out
-
-| Arduino Pin | Function | Connected To |
-|-------------|----------|--------------|
-| **48 (L3)** | `SET_BERTAN_3KV` jumper | Pull **LOW** if 3 kV PSU is attached |
-| **50 (B3)** | `SET_BERTAN_20KV` jumper | Pull **LOW** if 20 kV PSU is attached |
-| **52 (B1)** | `SET_MATSUSADA_1KV` jumper | Pull **LOW** if 1 kV / 30 mA PSU is attached |
-| **A0**      | `V‑MON`  | 0–5 V voltage‑monitor output |
-| **A1**      | `POT`    | 0–5 V set‑point potentiometer |
-| **A2**      | `I‑MON`  | 0–5 V current‑monitor output |
-| **SDA/SCL** | I²C bus  | ADS1115 + LCD backpack |
-| 5 V / GND   | Power    | As usual |
-
-> **Note:** Only *one* of the three “SET_…” pins should be low at power‑up.  
-> Leave the others floating (internal pull‑ups are enabled).
+- Reads **interlock comparators** (open-drain) and **front-panel switches**
+- Controls three hardware enables:
+  - **CCS Enable** (A0 / PF0)
+  - **Beam Enable** (A1 / PF1)
+  - **3kV Enable** (A2 / PF2)
+- Publishes **status + event flags** on two 8‑bit ports for the 3kV Monitoring Arduino to read.
+- Uses an **ACK toggle input** on **D14 / PJ1** to clear latched event flags after the 3kV Monitoring Arduino reads flags.
+- Drives an **ACK echo / ack-back output** on **D9 / PH6** that toggles on every observed ACK edge so the monitor Arduino can verify that the Logic Arduino is alive.
 
 ---
 
-## Software Dependencies
+## Safety model and assumptions
 
-Install via the Arduino Library Manager or add to `platformio.ini`:
+### Comparator inputs (D42–D49, PORTL) are open-drain
 
-* **arduino‑timer** — <https://github.com/contrem/arduino-timer>  
-* **Adafruit ADS1X15**  
-* **LiquidCrystal_I2C**
+Comparator lines are treated as open-drain/open-collector:
 
-Target board: **Arduino Mega 2560** (ATmega2560).
+- **SAFE:** comparator drives **LOW**
+- **FAULT / INTERLOCK:** comparator is **Hi‑Z**, Logic Arduino pullup makes input read **HIGH**
+- **Disconnected wire:** reads **HIGH** → treated as **FAULT**
+
+**In firmware:** comparator bits are read from `PINL` and **not inverted**.  
+A `1` bit means **FAULT**.
 
 ---
 
-## How the Firmware Works
+## Tunable parameters
 
-### Startup (`setup()`)
+These constants are near the top of the file:
 
-1. Initialize Serial, I²C, ADS1115, and LCD.  
-2. Auto‑detect PSU via pins 48/50/52 and set multipliers:
+### `TIMER_3KV_MS` (default: `100`)
+```cpp
+static constexpr uint32_t TIMER_3KV_MS = 100;
+```
+3kV lockout duration (ms) after a 3kV trip.
 
-| Model | Full‑scale V | Full‑scale I | `voltage_multiplier` | `current_multiplier` |
-|-------|--------------|--------------|----------------------|----------------------|
-| Bertan 205B‑03R |  3 000 V | 10 mA |  3000 | 10 |
-| Bertan 205B‑20R | 20 000 V |  1 mA | 20000 |  1 |
-| Matsusada 1 kV  |  1 000 V | 30 mA |  1000 | 30 |
+### `DEBOUNCE_BITS`
+```cpp
+static constexpr uint8_t  DEBOUNCE_BITS = 6; // 1..31
+static constexpr uint32_t MASK_DEBOUNCE = (uint32_t)((1u << DEBOUNCE_BITS) - 1u);
+```
+Debounce length in **number of consecutive samples** (sample occurs every ~25 us).
 
-3. Register three non‑blocking timers (arduino‑timer):
+> **Important:** `DEBOUNCE_BITS` must remain in `1..31`. Values outside that range can produce undefined behavior due to shifting.
 
-| Slot | Callback | Period | Purpose |
-|------|----------|--------|---------|
-| 0 | `read_value()`    | 150 ms | Read ADC & compute engineering units  |
-| 1 | `display_value()` | 200 ms | Update LCD and Serial                 |
-| 2 | `clear_display()` | 30 min | `lcd.clear()` to wipe any ghost chars |
+---
 
-4. Enable the AVR watchdog (`8 s`).
+## Hardware pin mapping
 
-### Main Loop (`loop()`)
+### Inputs
+
+| Signal | Arduino Pin | AVR Port/Bit | Pullup | Polarity in Code | Notes |
+|---|---:|---|---|---|---|
+| 3kV HV Output Enable Switch | D10 | PB4 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| Arm Beams Switch | D11 | PB5 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| CCS Power Allow Switch | D12 | PB6 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| Arm 80kV Switch | D13 | PB7 | Yes | asserted = 1 | Active-low at pin, inverted in `switchesAssertPortB` |
+| ACK (toggle-to-clear) | D14 | PJ1 | Yes | high = 1 | Any level change clears latched flags |
+| Reset Button | D15 | PJ0 | Yes | pressed = 1 | Active-low at pin; debounced and rising-edge detected |
+| +1kV V Comparator | D42 | PL7 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| +1kV I Comparator | D43 | PL6 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| -1kV V Comparator | D44 | PL5 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| -1kV I Comparator | D45 | PL4 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 20kV V Comparator | D46 | PL3 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 20kV I Comparator | D47 | PL2 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 3kV V Comparator | D48 | PL1 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+| 3kV I Comparator | D49 | PL0 | Yes | FAULT = 1 | Open-drain: LOW = safe, Hi-Z → HIGH = fault |
+
+#### Switch and reset inversion
+Switches and reset are physically **active-low** at the pin (pulled high, asserted by pulling to GND). Sampling converts them to **asserted = 1**:
 
 ```cpp
-void loop() {
-  wdt_reset();     // kick watchdog
-  timer.tick();    // run any due callbacks
-}
+s.switchesAssertPortB = (uint8_t)(~PINB) & MASK_SWITCHES_PORTB;
+s.resetAsserted       = (PINJ & MASK_RESET_BTN) == 0;
 ```
 
-No delay() calls — MCU stays responsive.
+ACK is **not inverted**:
 
-Memory‑Safety Highlights
-* Zero run‑time heap — no String objects after setup().
+```cpp
+s.ackLevel = (PINJ & MASK_ACK) != 0;
+```
 
-* Fixed‑size char[] buffers with snprintf() prevent overflow.
+---
 
-* ADC samples kept as int16_t, matching the Adafruit driver.
+### Outputs (hardware enables + ack-back + LED)
 
-ADC & Scaling
-* ADS1115 at ±6.144 V → 1 LSB = 0.1875 mV.
+| Output | Arduino Pin | AVR Port/Bit | Active level | Meaning |
+|---|---:|---|---|---|
+| CCS Enable | A0 | PF0 | HIGH enables CCS Power | `out.ccsPowerEnable` |
+| Beam Enable | A1 | PF1 | HIGH enables Beams via BCON | `out.armBeamsEnable` |
+| 3kV Enable | A2 | PF2 | HIGH enables HV Output | `out.enable3kV` |
+| Ack-Back | D9 | PH6 | HIGH when `ackEchoState = 1` | Toggles on each observed ACK edge on D14 so the 3kV mon arduino can verify that the logic arduino is running |
+| Interlock LED | D16 | PH1 | HIGH drives LED | ON when NOT in NOM_OP |
+---
 
-* Sample rate 860 SPS ensures a fresh reading every 150 ms.
+## Flag outputs (status + latched events)
 
-* Conversions:
-  - HV_set (V)  = potVolts / 5 × V_multiplier  
-  - HV_meas (V) = vmonVolts / 5 × V_multiplier  
-  - I_meas (mA) = imonVolts / 5 × I_multiplier  
+Two 8‑bit ports are dedicated to flag outputs:
 
-Serial Log Format
-Set:  750 V,  HV:  742 V,  I: 0.152 mA
-One line every 200 ms, newline‑terminated.
+### PORTA (D22–D29): live outputs + NomOp + latched switch events
+`PORTA` is rebuilt and written every `step()`:
 
-### Building & Uploading
-#### Arduino CLI
-arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 .
-arduino-cli upload  -p /dev/ttyACM0 --fqbn arduino:avr:mega:cpu=atmega2560 .
-(Or use PlatformIO: platformio run -t upload.)
+| Flag Name | Flag Pin | AVR Port/Bit | Source | Latched? | Meaning |
+|---|---:|---|---|---|---|
+| CCS Power Enable | D22 | PA0 | `out.ccsPowerEnable` | No | Mirrors current CCS enable output |
+| Beam Enable | D23 | PA1 | `out.armBeamsEnable` | No | Mirrors current Beam enable output |
+| 3kV HV Enable | D24 | PA2 | `out.enable3kV` | No | Mirrors current 3kV enable output |
+| Nom Op | D25 | PA3 | `out.nomOp` | No | 1 = in `STATE_NOM_OP` |
+| 3kV HV Output Enable Switch | D26 | PA4 | `prevFlagsSwitches` (PB4) | Yes | Switch asserted at least once since last ACK toggle |
+| Arm Beams Switch | D27 | PA5 | `prevFlagsSwitches` (PB5) | Yes | Switch asserted at least once since last ACK toggle |
+| CCS Power Allow Switch | D28 | PA6 | `prevFlagsSwitches` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
+| Arm 80kV Switch | D29 | PA7 | `prevFlagsSwitches` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
 
-#### Extending the Firmware
-* Add a PSU – reserve a new input pin, duplicate the jumper‑detect block, set new multipliers.
-* Change refresh rates – adjust the two timer periods; keep display ≥ read.
-* Alter LCD layout – edit display_value() only; rest of the logic is unaffected.
+### PORTC (D30–D37): latched comparator fault events
+`PORTC` reflects `prevFlagsComparators`, a sticky OR of `PINL` since last ACK toggle:
 
-## Branching and Pull Request Strategy
+```cpp
+prevFlagsComparators |= sample.comparators; // sample.comparators = PINL
+PORTC = prevFlagsComparators;
+```
 
-Our repository uses a structured branching strategy with two primary branches:
+**Bit-ordering note:** `PINL` bits are copied into `PORTC` bits directly. Physical Arduino pin numbering on PORTC is reversed relative to bit indices:
 
-### `main` Branch
+|> PORTC contains latched comparator fault events (sticky OR since last ACK toggle).
 
-- Protected by a ruleset requiring pull requests for all updates.
-- Commits on `main` are tagged for important milestones or deployments, allowing easy reference later.
-  - Example: `v1.0` corresponds to the version used in the 3kV High Voltage Test.
+| Comparator Name | Comparator Input Pin | Comparator AVR Port/Bit | Flag Pin | Flag AVR Port/Bit | Latched? | Meaning |
+|---|---:|---|---:|---|---|---|
+| +1kV V Comparator | D42 | PL7 | D30 | PC7 | Yes | 1 if this comparator faulted since last ACK toggle |
+| +1kV I Comparator | D43 | PL6 | D31 | PC6 | Yes | 1 if this comparator faulted since last ACK toggle |
+| -1kV V Comparator | D44 | PL5 | D32 | PC5 | Yes | 1 if this comparator faulted since last ACK toggle |
+| -1kV I Comparator | D45 | PL4 | D33 | PC4 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 20kV V Comparator | D46 | PL3 | D34 | PC3 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 20kV I Comparator | D47 | PL2 | D35 | PC2 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 3kV V Comparator | D48 | PL1 | D36 | PC1 | Yes | 1 if this comparator faulted since last ACK toggle |
+| 3kV I Comparator | D49 | PL0 | D37 | PC0 | Yes | 1 if this comparator faulted since last ACK toggle |
 
-### `develop` Branch
+---
 
-- The default branch for ongoing development.
-- No enforced ruleset, but all changes to `develop` should use pull requests for clarity and review.
+## ACK toggle-to-clear protocol (D14 / PJ1)
 
-### Workflow
+`write_flags()` uses an ACK level change to clear the latched event flags:
 
-1. Always branch from `develop`.
-   - **Bug fixes:** `bugfix/your-fix-description`
-   - **New features:** `feature/your-feature-description`
+- `prevFlagsComparators` (latched comparator faults)
+- `prevFlagsSwitches` (latched switch assertions)
 
-2. Create a draft pull request early to facilitate discussion and feedback during development.
-3. Pull requests must be reviewed and approved by at least one other coder before merging.
+Any edge (low→high or high→low) clears the latches:
 
-### Pull Request Guidelines
+```cpp
+if (sample.ackLevel != prevAck) {
+  prevFlagsComparators = 0;
+  prevFlagsSwitches    = 0;
+  ackEchoState = !ackEchoState;
+}
+prevAck = sample.ackLevel;
+```
 
-- Keep pull requests focused and clean:
-  - Avoid unrelated changes (e.g., unnecessary whitespace or formatting changes) unless explicitly intended.
-  - Clearly document your changes to aid review.
+This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches flags**.
 
-Following this structure helps maintain clear version history, effective collaboration, and high-quality code.
+### ACK echo / ack-back protocol (D9 / PH6)
+
+Behavior:
+
+- The 3kV Monitor Arduino toggles the ACK line on **D14 / PJ1** after reading the flag pins.
+- The Logic Arduino samples D14 in `sample_inputs()`.
+- When `write_flags()` detects that `sample.ackLevel != prevAck`, it:
+  - clears the latched flag history, and
+  - toggles `ackEchoState`.
+- `write_outputs()` then drives `ackEchoState` out on **D9 / PH6**.
+
+This gives the 3kV monitor a dedicated proof-of-life signal: if the 3kV monitor toggles ACK and later sees **D9 change state**, then the Logic Arduino observed the ACK edge and is still executing its main loop.
+
+---
+
+## Debounce implementation
+
+Debounce uses a shift-register history per signal:
+
+- 4 switch histories: `switchHist[4]`
+- reset button history: `resetButtonHist`
+
+On each sample, history shifts left and inserts the newest sample bit in the LSB. If the last `DEBOUNCE_BITS` samples are all 0 or all 1, the stable value is updated; otherwise it holds.
+
+```cpp
+hist = (hist << 1) | (sample ? 1u : 0u);
+maskedHist = hist & MASK_DEBOUNCE;
+if (maskedHist == 0) stable = false;
+else if (maskedHist == MASK_DEBOUNCE) stable = true;
+```
+
+**Reset Button edge detection** is performed on the debounced reset signal:
+
+```cpp
+const bool resetButtonEdge = resetButtonDb && !prevResetButtonDb;
+prevResetButtonDb = resetButtonDb;
+```
+
+---
+
+## State machine
+
+### State enum
+```cpp
+enum class State : uint8_t {
+  STATE_INTERLOCK  = 0,
+  STATE_NOM_OP     = 1,
+  STATE_3KV_TIMER  = 2
+};
+```
+
+### Comparator masks used in logic
+- `MASK_COMP_3KV_I` = `PL0` (Arduino D49) — 3kV **current** fault
+- `MASK_COMP_3KV`   = `PL0 | PL1` (D49 + D48) — 3kV **current OR voltage** fault
+
+```cpp
+static constexpr uint8_t MASK_COMP_3KV      = _BV(PL0) | _BV(PL1);
+static constexpr uint8_t MASK_COMP_3KV_I    = _BV(PL0);
+```
+
+---
+
+### Overview of `step()`
+
+Each `loop()` iteration calls `step()`:
+
+1. `sample_inputs()` reads raw pins into a `Sample`
+2. Switches + reset are debounced
+3. State transitions are evaluated based on:
+   - comparator faults
+   - debounced switches
+   - reset button **edge**
+4. Outputs are assigned from state + debounced switches
+5. Flags are updated (including ACK-cleared latches and any D9 ack-back toggle caused by an ACK edge)
+6. Outputs are driven (register writes only if changed, including D9 ack-back)
+
+---
+
+## State behavior
+
+### `STATE_INTERLOCK` (BI / Interlock)
+**Transitions:**
+- If **3kV overcurrent** fault (`comparators & MASK_COMP_3KV_I`) → enter `STATE_3KV_TIMER`, set `timerEnterMs = millis()`, and stop evaluating other transitions this step.
+- Else if **resetButtonEdge** and **all comparators safe** and required switches asserted:
+  - `comparators == 0`
+  - `sw_arm_80kv == true` (D13)
+  - `sw_3kv_enable == true` (D10)  
+  → enter `STATE_NOM_OP`
+
+**Outputs:**
+- CCS enable: OFF
+- Beam enable: OFF
+- 3kV enable: follows **debounced** 3kV switch (`sw_3kv_enable`)
+- `nomOp`: 0
+
+---
+
+### `STATE_NOM_OP` (Nominal Operation)
+**Transitions (evaluated in this order):**
+1. If **3kV V/I fault** (`comparators & MASK_COMP_3KV`) → enter `STATE_3KV_TIMER` and set `timerEnterMs`.
+2. Else if any of the following:
+   - any comparator fault (`comparators != 0`)
+   - Arm 80kV switch deasserted (`!sw_arm_80kv`)
+   - 3kV enable switch deasserted (`!sw_3kv_enable`)  
+   → return to `STATE_INTERLOCK`
+
+**Outputs:**
+- CCS enable: follows debounced CCS allow switch (`sw_ccs_allow`, D12)
+- Beam enable: follows debounced arm beams switch (`sw_arm_beams`, D11)
+- 3kV enable: follows debounced 3kV switch (`sw_3kv_enable`, D10)
+- `nomOp`: 1
+
+---
+
+### `STATE_3KV_TIMER` (3kV lockout)
+**Transition:**
+- Return to `STATE_INTERLOCK` only if **both** conditions are true:
+  - 3kV current comparator is no longer faulted (`(comparators & MASK_COMP_3KV_I) == 0`)
+  - elapsed time is at least `TIMER_3KV_MS`
+
+  ```cpp
+  if (((inputSnapshot.comparators & MASK_COMP_3KV_I) == 0) &&
+      ((uint32_t)(millis() - timerEnterMs) >= TIMER_3KV_MS))
+      currentState = State::STATE_INTERLOCK;
+  ```
+
+**Outputs (forced safe):**
+- CCS enable: OFF
+- Beam enable: OFF
+- 3kV enable: OFF
+- `nomOp`: 0
+
+---
+
+## Mermaid diagram
+
+```mermaid
+%%{init:{
+  "theme":"base",
+  "flowchart":{
+    "nodeSpacing":12,
+    "rankSpacing":18,
+    "padding":4,
+    "curve":"linear",
+    "useMaxWidth": true
+  },
+  "themeVariables":{
+    "fontFamily":"Inter, Segoe UI, Arial",
+    "fontSize":"14px",
+
+    "background":"#ffffff",
+    "textColor":"#0f172a",
+
+    "primaryColor":"#f1f5f9",
+    "primaryTextColor":"#0f172a",
+    "primaryBorderColor":"#2563eb",
+
+    "secondaryColor":"#e2e8f0",
+    "secondaryTextColor":"#0f172a",
+    "secondaryBorderColor":"#64748b",
+
+    "tertiaryColor":"#f8fafc",
+    "tertiaryTextColor":"#0f172a",
+    "tertiaryBorderColor":"#64748b",
+
+    "lineColor":"#334155",
+    "arrowheadColor":"#334155",
+
+    "clusterBkg":"#f8fafc",
+    "clusterBorder":"#94a3b8",
+
+    "noteBkg":"#eff6ff",
+    "noteBorderColor":"#2563eb",
+    "noteTextColor":"#0f172a"
+  }
+}}%%
+
+flowchart TD
+    START[Power up or reset]
+    START ==> INIT["Hardware Initialization io_init_registers()"]
+    INIT ==> DEFAULT["Set default outputs, sample initial inputs"]
+    DEFAULT ==> LOOP["step()"]
+
+    LOOP ==> SAMPLE[Sample logic arduino inputs]
+
+    SAMPLE ==> DEBOUNCE[Debounce switches and reset button]
+
+    DEBOUNCE ==> SWITCHES[Compute debounced reset button and switch states]
+
+    SWITCHES ==> STATE{Current State?}
+
+    STATE ===> INTERLOCK[STATE_INTERLOCK]
+    INTERLOCK ==> I_3KVI{{3kV I fault?}}
+    I_3KVI ==> I_3KVI_T[True]
+    I_3KVI ==> I_3KVI_F[False]
+    I_3KVI_T ===> I_TO_TIMER[Enter STATE_3KV_TIMER]
+    I_3KVI_F ===> I_NOMOP_COND{{Reset button pushed AND comparators safe AND 80kV asserted AND 3kV En asserted}}
+
+    I_NOMOP_COND ==> I_NOMOP_T[True]
+    I_NOMOP_COND ==> I_NOMOP_F[False]
+    I_NOMOP_T ===> I_TO_NOMOP[Enter STATE_NOM_OP]
+    I_NOMOP_F ===> I_STAY_I[Remain STATE_INTERLOCK]
+
+    I_TO_TIMER ==> OUT_STATE
+    I_TO_NOMOP ==> OUT_STATE
+    I_STAY_I ==> OUT_STATE
+
+    STATE ===> NOMOP[STATE_NOM_OP]
+    NOMOP ==> N_3KVFAULT{{3kV I fault OR 3kV V fault?}}
+    N_3KVFAULT ==> N_3KV_T[True]
+    N_3KVFAULT ==> N_3KV_F[False]
+    N_3KV_T ===> N_TO_TIMER[Enter STATE_3KV_TIMER]
+    N_3KV_F ===> N_OTHERFAULT{{Any comparator fault OR 80kV switch off OR 3kV En switch off}}
+
+    N_OTHERFAULT ==> N_OTHER_T[True]
+    N_OTHERFAULT ==> N_OTHER_F[False]
+    N_OTHER_T ===> N_TO_INTERLOCK[Exit to STATE_INTERLOCK]
+    N_OTHER_F ===> N_STAY_N[Remain STATE_NOM_OP]
+
+    N_TO_TIMER ==> OUT_STATE
+    N_TO_INTERLOCK ==> OUT_STATE
+    N_STAY_N ==> OUT_STATE
+
+    STATE ===> TIMER[STATE_3KV_TIMER]
+    TIMER ==> T_EXPIRE{{"No 3kV I fault AND millis() - timerEnterMs >= 100 ms"}}
+    T_EXPIRE ==> T_EXP_T[True]
+    T_EXPIRE ==> T_EXP_F[False]
+    T_EXP_T ===> T_TO_INTERLOCK[Enter STATE_INTERLOCK]
+    T_EXP_F ===> T_STAY_T[Remain STATE_3KV_TIMER]
+
+    T_TO_INTERLOCK ==> OUT_STATE
+    T_STAY_T ==> OUT_STATE
+
+    OUT_STATE{Current State?}
+
+    OUT_STATE ===> OUT_INTERLOCK_STATE[STATE_INTERLOCK]
+    OUT_STATE ===> OUT_NOMOP_STATE[STATE_NOM_OP]
+    OUT_STATE ===> OUT_TIMER_STATE[STATE_3KV_TIMER]
+
+    OUT_INTERLOCK_STATE ==> OUT_INTERLOCK[Outputs CCS = OFF Beam = OFF 3kV = 3kV enable switch]
+    OUT_NOMOP_STATE ==> OUT_NOMOP[Outputs CCS = CCS allow switch Beam = Arm Beams switch 3kV = 3kV enable switch]
+    OUT_TIMER_STATE ==> OUT_TIMER[Outputs CCS = OFF Beam = OFF 3kV = OFF]
+
+    OUT_INTERLOCK ==> WRITE_OUTPUTS[Write Outputs]
+    OUT_NOMOP ==> WRITE_OUTPUTS
+    OUT_TIMER ==> WRITE_OUTPUTS
+
+    WRITE_OUTPUTS ==> FLAGS[Update Flags]
+    
+    FLAGS ==> LOOP
+
+```
+
+---
+
+## Initialization (`setup()`)
+
+`setup()` performs:
+
+- `io_init_registers()`:
+  - configures DDR registers
+  - enables pullups on inputs (switches, ack, reset button, comparators)
+  - configures D9 / PH6 as the **ACK echo** output
+  - forces safe posture on outputs (PF0–PF2 OFF; D9 ACK echo LOW; LED ON)
+  - initializes flags (PORTA/PORTC) to 0
+- initializes `prevPORTF` / `prevPORTH` to current output registers
+- resets state to `STATE_INTERLOCK`
+- clears debounce histories
+- clears `ackEchoState`
+- samples initial inputs
+- generates an initial flag image (`write_flags(raw, out)`)
+- re-applies safe outputs (`write_outputs(out)`)
+
+---
+
+## Known discrepancies / logic notes (from code review)
+
+1. **Debounce time depends on loop rate.**  
+   `DEBOUNCE_BITS` is a sample count; any change in loop timing changes debounce time.
+
+2. **Ack-back may toggle once during startup if D14 is already HIGH at boot.**  
+   `write_flags()` initializes its local `prevAck` to `false` and is called once during `setup()` after sampling D14. If the ACK input is already HIGH on that first call, the code will treat that as an ACK edge, clear the latches, and toggle `ackEchoState` once before normal runtime begins.
+
+   This does not break the ongoing ack-back handshake, but it can create one startup transition on D9 that is caused by initialization rather than by a fresh monitor-issued ACK toggle.
+---
+
+## File of record
+
+- `logic_arduino_revised.cpp` — main implementation with D9 ack-back support
+- Arduino entry points:
+  - `setup()` initializes registers and safe posture
+  - `loop()` calls `step()` continuously
