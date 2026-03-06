@@ -82,10 +82,12 @@ bool read_value(void *) { //Callback to read ADC
   //   measuredI_mA = (imonVolts / 5.0) * 10.0;
   // The polarity pin is open-collector; if you’ve got a pull-up to 5 V, reading near 0 means
   // positive polarity, near 5 means negative. You can threshold it to figure out text labels.
+  // Since we are not using the polarity pin for the measured values here, we can use
+  //   an absolute value to make sure they do not go negative
 
-  hvProgram_V = (potVolts / 5.0) * voltage_multiplier;     //programmed voltage set * voltage_multiplier
-  measuredHV_V = (vmonVolts / 5.0) * voltage_multiplier;   // reading voltage *voltage_multiplier
-  measuredI_mA  = (imonVolts / 5.0) * current_multiplier;  // reading current * voltage_multiplier
+  hvProgram_V = abs((potVolts / 5.0) * voltage_multiplier);     //programmed voltage set * voltage_multiplier
+  measuredHV_V = abs((vmonVolts / 5.0) * voltage_multiplier);   // reading voltage *voltage_multiplier
+  measuredI_mA  = abs((imonVolts / 5.0) * current_multiplier);  // reading current * voltage_multiplier
 
   return true; // repeat? true
 }
@@ -101,7 +103,7 @@ bool display_value(void *) { //Callback to Display value
   Serial.print(" V,  HV: ");
   Serial.print(measuredHV_V, 0);
   Serial.print(" V,  I: ");
-  Serial.print(measuredI_mA, 2);
+  Serial.print(measuredI_mA, 3);
   Serial.println(" mA");
 
   // Display two readings on each of the two LCD rows
@@ -118,7 +120,11 @@ bool display_value(void *) { //Callback to Display value
   lcd.setCursor(0, 1);
   lcd.print(vbuffer);
   lcd.setCursor(10, 1);
-  lcd.print(measuredI_mA,1);
+  // If the voltage multiplier is <10000, we have an extra spot to put a decimal
+  if(voltage_multiplier < 10000)
+    lcd.print(measuredI_mA, 2);
+  else
+    lcd.print(measuredI_mA, 1);
   lcd.print("mA ");
   
   return true; // repeat? true
