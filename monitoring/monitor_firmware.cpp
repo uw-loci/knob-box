@@ -59,10 +59,11 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define DINPUT_20K_ICOMP_FLAG_ADDR      21
 #define DINPUT_3K_VCOMP_FLAG_ADDR       22
 #define DINPUT_3K_ICOMP_FLAG_ADDR       23
+#define DINPUT_LOGIC_ALIVE_ADDR         24   // 1 when Logic Arduino responded to the previous ACK cycle
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              5
-#define DINPUT_COUNT            19
+#define DINPUT_COUNT            20
 #define TOTAL_REG_COUNT         (IREG_COUNT + DINPUT_COUNT)
 //============================================================
 //============================================================
@@ -89,6 +90,7 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define RS485_TX_PIN                    18
 #define RS485_DIR_PIN                   17      // low = receive mode
 #define FLAGS_ACK_PIN                   14      // ack pin to Logic Arduino
+#define LOGIC_ACK_ECHO_PIN              9       // ACK-back from Logic Arduino (toggles when Logic observes ACK edge)
 // (logic arduino outputs)
 #define OUTPUT_CCSPOWER_PIN             22
 #define OUTPUT_ARMBEAMS_PIN             23
@@ -122,6 +124,8 @@ float               thresholdHV_V;              // thresholds
 float               thresholdI_mA;              // ""
 bool                resetState1kV = false;      // for Matsusada reset state logic            
 bool                ack_state = false;          // false = HI-Z, true = LOW
+bool                logicArduinoAlive = false;  // true when D9 changed since the previous monitor cycle
+bool                prevLogicAckEcho = false;   // D9 state sampled on previous 150 ms cycle
 char                buffer[21];                 // store formatted string to print to LCD
 char                programmedHV_buf[10];       // store current/voltage values for printing
 char                measuredHV_buf[10];         // ""    
@@ -308,6 +312,12 @@ bool read_value()
         modbus_regs[DINPUT_20K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_20K_ICOMP_PIN);
         modbus_regs[DINPUT_3K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_3K_VCOMP_PIN);
 
+
+        // Look for Ack Back Edge from logic Arduino
+        bool d9State = digitalRead(LOGIC_ACK_ECHO_PIN);
+        modbus_regs[DINPUT_LOGIC_ALIVE_ADDR] = (d9State != prevLogicAckEcho);
+        prevLogicAckEcho = d9State;
+
         // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
             pinMode(FLAGS_ACK_PIN, OUTPUT);
@@ -317,6 +327,7 @@ bool read_value()
             pinMode(FLAGS_ACK_PIN, INPUT); // high impedance
             ack_state = false;
         }
+
     }
 
     return true;
@@ -498,7 +509,10 @@ void setup()
             ratedHV_V = 3000.0;
             ratedI_mA = 10.0;
 
-            // pins for logic arduino flags
+            // pins for logic arduino outputs / flags / ack
+            pinMode(OUTPUT_CCSPOWER_PIN, INPUT);
+            pinMode(OUTPUT_ARMBEAMS_PIN, INPUT);
+            pinMode(OUTPUT_3KV_ENABLE_PIN, INPUT);
             pinMode(25, INPUT);
             pinMode(26, INPUT);
             pinMode(27, INPUT);
@@ -513,6 +527,8 @@ void setup()
             pinMode(36, INPUT);
             pinMode(37, INPUT); 
             pinMode(FLAGS_ACK_PIN, INPUT);
+            pinMode(LOGIC_ACK_ECHO_PIN, INPUT_PULLUP);
+            prevLogicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);         // initialize prevLogicAckEcho
             // switches only monitored by +3kV
             pinMode(ARM_BEAMS_SWITCH_PIN, INPUT_PULLUP);
             pinMode(CCS_POWER_ALLOW_SWITCH_PIN, INPUT_PULLUP);
