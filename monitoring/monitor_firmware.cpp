@@ -283,9 +283,9 @@ bool read_value()
         modbus_regs[DINPUT_ARM80KV_ADDR] = (digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
 
         // read logic arduino outputs
-        modbus_regs[DINPUT_ARMBEAMS_ADDR] = (digitalRead(OUTPUT_ARMBEAMS_PIN) == LOW);
-        modbus_regs[DINPUT_CCSPOWER_ADDR] = (digitalRead(OUTPUT_CCSPOWER_PIN) == LOW);
-        modbus_regs[DINPUT_3KV_ENABLE_ADDR] = (digitalRead(OUTPUT_3KV_ENABLE_PIN) == LOW);
+        modbus_regs[DINPUT_ARMBEAMS_ADDR] = digitalRead(OUTPUT_ARMBEAMS_PIN);
+        modbus_regs[DINPUT_CCSPOWER_ADDR] = digitalRead(OUTPUT_CCSPOWER_PIN) ;
+        modbus_regs[DINPUT_3KV_ENABLE_ADDR] = digitalRead(OUTPUT_3KV_ENABLE_PIN);
 
         // "important" flags
         bool nomop = digitalRead(FLAG_NOMOP_PIN);
@@ -312,11 +312,10 @@ bool read_value()
         modbus_regs[DINPUT_20K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_20K_ICOMP_PIN);
         modbus_regs[DINPUT_3K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_3K_VCOMP_PIN);
 
-
         // Look for Ack Back Edge from logic Arduino
-        bool d9State = digitalRead(LOGIC_ACK_ECHO_PIN);
-        modbus_regs[DINPUT_LOGIC_ALIVE_ADDR] = (d9State != prevLogicAckEcho);
-        prevLogicAckEcho = d9State;
+        bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
+        modbus_regs[DINPUT_LOGIC_ALIVE_ADDR] = (logicAckEcho != prevLogicAckEcho);
+        prevLogicAckEcho = logicAckEcho;
 
         // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
