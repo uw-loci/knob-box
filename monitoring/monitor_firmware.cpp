@@ -512,22 +512,22 @@ void setup()
             pinMode(OUTPUT_CCSPOWER_PIN, INPUT);
             pinMode(OUTPUT_ARMBEAMS_PIN, INPUT);
             pinMode(OUTPUT_3KV_ENABLE_PIN, INPUT);
-            pinMode(25, INPUT);
-            pinMode(26, INPUT);
-            pinMode(27, INPUT);
-            pinMode(28, INPUT);
-            pinMode(29, INPUT);
-            pinMode(30, INPUT);
-            pinMode(31, INPUT);
-            pinMode(32, INPUT);
-            pinMode(33, INPUT);
-            pinMode(34, INPUT);
-            pinMode(35, INPUT);
-            pinMode(36, INPUT);
-            pinMode(37, INPUT); 
+            pinMode(FLAG_NOMOP_PIN, INPUT);
+            pinMode(FLAG_3K_HVENABLE_PIN, INPUT);
+            pinMode(FLAG_ARMBEAMS_PIN, INPUT);
+            pinMode(FLAG_CCSPOWER_PIN, INPUT);
+            pinMode(FLAG_ARM80KV_PIN, INPUT);
+            pinMode(FLAG_1K_VCOMP_PIN, INPUT);
+            pinMode(FLAG_1K_ICOMP_PIN, INPUT);
+            pinMode(FLAG_NEG_1K_VCOMP_PIN, INPUT);
+            pinMode(FLAG_NEG_1K_ICOMP_PIN, INPUT);
+            pinMode(FLAG_20K_VCOMP_PIN, INPUT);
+            pinMode(FLAG_20K_ICOMP_PIN, INPUT);
+            pinMode(FLAG_3K_VCOMP_PIN, INPUT);
+            pinMode(FLAG_3K_ICOMP_PIN, INPUT);
             pinMode(FLAGS_ACK_PIN, INPUT);
             pinMode(LOGIC_ACK_ECHO_PIN, INPUT_PULLUP);
-            prevLogicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);         // initialize prevLogicAckEcho
+            prevLogicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);// initialize prevLogicAckEcho
             // switches only monitored by +3kV
             pinMode(ARM_BEAMS_SWITCH_PIN, INPUT_PULLUP);
             pinMode(CCS_POWER_ALLOW_SWITCH_PIN, INPUT_PULLUP);
