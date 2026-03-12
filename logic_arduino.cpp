@@ -49,6 +49,7 @@
 
 #include <Arduino.h>
 #include <avr/io.h>
+#include <avr/wdt.h>
 
 struct Sample; // redundant but arduino does cpp weird, and it freaks out if this forward dec isnt here
 struct Output;
@@ -56,6 +57,14 @@ struct Output;
 // ========================= Constants =========================
 static constexpr uint32_t TIMER_3KV_MS   = 100;
 static constexpr uint8_t  DEBOUNCE_BITS = 6;    // Can be set from 1 to 31 (do NOT set an illegal number for this, weird stuf could happen)
+
+enum class Timer3kVStateMode : uint8_t {
+  DISABLE = 0,
+  ENABLE  = 1
+};
+
+// Set to DISABLE to remove all transitions into STATE_3KV_TIMER.
+static constexpr Timer3kVStateMode TIMER_3KV_STATE_MODE = Timer3kVStateMode::ENABLE;
 
 // ========================= Port mapping =========================
 // Switches D10-13 => PB4-PB7
@@ -100,6 +109,21 @@ static constexpr uint32_t MASK_DEBOUNCE = (uint32_t)((1u << DEBOUNCE_BITS) - 1u)
 // PL0=D49 3kV I, PL1=D48 3kV V
 static constexpr uint8_t MASK_COMP_3KV      = (uint8_t)(_BV(PL0) | _BV(PL1));
 static constexpr uint8_t MASK_COMP_3KV_I    = _BV(PL0);
+
+static inline bool timer_3kv_state_enabled() {
+  return TIMER_3KV_STATE_MODE == Timer3kVStateMode::ENABLE;
+}
+
+// Capture reset cause and stop any inherited watchdog before normal startup runs.
+// This follows the standard avr-libc early-startup watchdog pattern.
+uint8_t resetCauseMirror __attribute__((section(".noinit")));
+void watchdog_early_init(void) __attribute__((naked)) __attribute__((section(".init3"))) __attribute__((used));
+
+void watchdog_early_init(void) {
+  resetCauseMirror = MCUSR;
+  MCUSR = 0;
+  wdt_disable();
+}
 
 // ===================== Runtime state globals  =====================
 
@@ -312,11 +336,13 @@ static inline void step() {
   switch (currentState) {
     case State::STATE_INTERLOCK: {
 
-      // Check for 3kv overcurrent right away
-      if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
-        currentState = State::STATE_3KV_TIMER;
-        timerEnterMs = millis();
-        break;
+      // If timer is enabled, check for 3kv overcurrent right away 
+      if (timer_3kv_state_enabled()) {
+        if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
+          currentState = State::STATE_3KV_TIMER;
+          timerEnterMs = millis();
+          break;
+        }
       }
 
       // Enter NomOp only on reset button edge and all comparators SAFE and 80k asserted and 3k asserted
@@ -328,11 +354,13 @@ static inline void step() {
 
     case State::STATE_NOM_OP: {
 
-      // Check for 3kv comparator trips right away
-      if (inputSnapshot.comparators & MASK_COMP_3KV) {
-        currentState = State::STATE_3KV_TIMER;
-        timerEnterMs = millis();
-        break;
+      if (timer_3kv_state_enabled()) {
+        // Check for 3kv comparator trips right away
+        if (inputSnapshot.comparators & MASK_COMP_3KV) {
+          currentState = State::STATE_3KV_TIMER;
+          timerEnterMs = millis();
+          break;
+        }
       }
 
       // If required interlock switches drop, or any other comparators trip return to BI
@@ -411,8 +439,14 @@ void setup() {
 
   // Ensure outputs are in safe posture
   write_outputs(out);
+
+  // Lightweight watchdog polling loop to reset the board in case of a lockup.  
+  // Start watchdog supervision only after the board is already driving its safe defaults.
+  wdt_enable(WDTO_500MS);
+  wdt_reset();
 }
 
 void loop() {
   step();
+  wdt_reset();
 }
