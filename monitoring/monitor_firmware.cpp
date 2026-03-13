@@ -311,6 +311,7 @@ bool read_value()
         modbus_regs[DINPUT_20K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_20K_VCOMP_PIN);
         modbus_regs[DINPUT_20K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_20K_ICOMP_PIN);
         modbus_regs[DINPUT_3K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_3K_VCOMP_PIN);
+        modbus_regs[DINPUT_3K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_3K_ICOMP_PIN);
 
         // Look for Ack Back Edge from logic Arduino
         bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
