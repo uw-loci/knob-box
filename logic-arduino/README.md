@@ -38,6 +38,23 @@ static constexpr uint32_t TIMER_3KV_MS = 100;
 ```
 3kV lockout duration (ms) after a 3kV trip.
 
+### `TIMER_3KV_STATE_MODE` (default: `ENABLE`)
+```cpp
+enum class Timer3kVStateMode : uint8_t {
+  DISABLE = 0,
+  ENABLE  = 1
+};
+
+static constexpr Timer3kVStateMode TIMER_3KV_STATE_MODE = Timer3kVStateMode::ENABLE;
+```
+Compile-time control for whether `STATE_3KV_TIMER` is used at all.
+
+- `ENABLE`: keep the current 3kV timer lockout behavior.
+- `DISABLE`: remove all transitions into `STATE_3KV_TIMER`.
+  - In `STATE_INTERLOCK`, a 3kV I fault no longer forces the timer state.
+  - In `STATE_NOM_OP`, 3kV V/I faults fall through to the normal `comparators != 0` path and return directly to `STATE_INTERLOCK`.
+  - `STATE_3KV_TIMER` remains in the enum and code, but becomes unreachable during normal operation.
+
 ### `DEBOUNCE_BITS`
 ```cpp
 static constexpr uint8_t  DEBOUNCE_BITS = 6; // 1..31
@@ -46,6 +63,17 @@ static constexpr uint32_t MASK_DEBOUNCE = (uint32_t)((1u << DEBOUNCE_BITS) - 1u)
 Debounce length in **number of consecutive samples** (sample occurs every ~25 us).
 
 > **Important:** `DEBOUNCE_BITS` must remain in `1..31`. Values outside that range can produce undefined behavior due to shifting.
+
+### Watchdog supervision
+```cpp
+void watchdog_early_init(void) __attribute__((naked)) __attribute__((section(".init3"))) __attribute__((used));
+...
+wdt_enable(WDTO_500MS);
+```
+The firmware uses the AVR watchdog in two stages:
+
+- Early startup (`.init3`): capture `MCUSR`, clear it, and disable any watchdog inherited from a prior reset before normal Arduino startup runs.
+- Runtime: enable a 500 ms watchdog near the end of `setup()` after safe outputs and initial flags are established, then refresh it once per `loop()`.
 
 ---
 
@@ -242,7 +270,7 @@ Each `loop()` iteration calls `step()`:
 
 ### `STATE_INTERLOCK` (BI / Interlock)
 **Transitions:**
-- If **3kV overcurrent** fault (`comparators & MASK_COMP_3KV_I`) → enter `STATE_3KV_TIMER`, set `timerEnterMs = millis()`, and stop evaluating other transitions this step.
+- If `TIMER_3KV_STATE_MODE == ENABLE` and **3kV overcurrent** fault (`comparators & MASK_COMP_3KV_I`) → enter `STATE_3KV_TIMER`, set `timerEnterMs = millis()`, and stop evaluating other transitions this step.
 - Else if **resetButtonEdge** and **all comparators safe** and required switches asserted:
   - `comparators == 0`
   - `sw_arm_80kv == true` (D13)
@@ -259,7 +287,7 @@ Each `loop()` iteration calls `step()`:
 
 ### `STATE_NOM_OP` (Nominal Operation)
 **Transitions (evaluated in this order):**
-1. If **3kV V/I fault** (`comparators & MASK_COMP_3KV`) → enter `STATE_3KV_TIMER` and set `timerEnterMs`.
+1. If `TIMER_3KV_STATE_MODE == ENABLE` and **3kV V/I fault** (`comparators & MASK_COMP_3KV`) → enter `STATE_3KV_TIMER` and set `timerEnterMs`.
 2. Else if any of the following:
    - any comparator fault (`comparators != 0`)
    - Arm 80kV switch deasserted (`!sw_arm_80kv`)
@@ -295,6 +323,8 @@ Each `loop()` iteration calls `step()`:
 ---
 
 ## Mermaid diagram
+
+The diagram below assumes `TIMER_3KV_STATE_MODE == ENABLE`. If the timer mode is set to `DISABLE`, the transitions into `STATE_3KV_TIMER` are removed and that state becomes unreachable.
 
 ```mermaid
 %%{init:{
@@ -419,6 +449,10 @@ flowchart TD
 
 `setup()` performs:
 
+- `watchdog_early_init()` runs earlier in the AVR `.init3` section:
+  - copies `MCUSR` into `resetCauseMirror`
+  - clears `MCUSR`
+  - disables any already-running watchdog before normal startup continues
 - `io_init_registers()`:
   - configures DDR registers
   - enables pullups on inputs (switches, ack, reset button, comparators)
@@ -432,6 +466,10 @@ flowchart TD
 - samples initial inputs
 - generates an initial flag image (`write_flags(raw, out)`)
 - re-applies safe outputs (`write_outputs(out)`)
+- enables the runtime watchdog with a 500 ms timeout (`wdt_enable(WDTO_500MS)`)
+- performs an initial watchdog kick (`wdt_reset()`)
+
+`loop()` then calls `step()` and refreshes the watchdog once per iteration with `wdt_reset()`.
 
 ---
 
@@ -448,7 +486,7 @@ flowchart TD
 
 ## File of record
 
-- `logic_arduino_revised.cpp` — main implementation with D9 ack-back support
+- `logic_arduino.cpp` — main implementation with D9 ack-back support
 - Arduino entry points:
   - `setup()` initializes registers and safe posture
   - `loop()` calls `step()` continuously
