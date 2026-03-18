@@ -1,163 +1,325 @@
-# High‑Voltage Power‑Supply Monitor (aka Knob Box) Firmware for E-Beam System
+# Firmware for Monitoring Arduino in High‑Voltage Power‑Supply Monitor (aka Knob Box) 
 
-Firmware for an **Arduino Mega 2560** that  
+Firmware for an **Arduino Mega 2560** that  
 
-* Reads **set‑voltage**, **measured voltage**, and **measured current** from one of four power supplies (Bertan 205B‑3 kV, Bertan 205B‑20 kV, Matsusada 1 kV / 30 mA, or Matsusada -1 kV / 30 mA).  
+* Reads **set‑voltage**, **measured voltage**, and **measured current** from one of four power supplies (Bertan 205B‑3 kV, Bertan 205B‑20 kV, Matsusada 1 kV / 30 mA, or Matsusada -1 kV / 30 mA).  
 * Displays the values on a 20 x 4 I²C LCD.  
 * Streams the same readings, using RS-485, back to the E-Beam dashboard.  
 * Runs for days without crashing thanks to: non‑blocking timers, zero heap allocations, an AVR watchdog, and a periodic LCD refresh.
 
+The same `monitor_firmware.cpp` source is used for four monitor variants:
+
+- `ps_id = 1`: `+1 kV Matsusada`
+- `ps_id = 2`: `-1 kV Matsusada`
+- `ps_id = 3`: `+20 kV Bertan`
+- `ps_id = 4`: `+3 kV Bertan`
+
+The `+3 kV` monitor has extra firmware responsibilities. In addition to monitoring its own supply, it also reads the Logic Arduino interface signals and forwards that state to the Dashboard through its Modbus register map.
+
 ---
 
-## Hardware Pin‑out
+## Hardware Pinout
 
-| Arduino Pin | Function | Connected To |
-|-------------|----------|--------------|
-| A0          | I comparator threshold voltage | I comparator |
-| A1          | V comparator threshold voltage | V comparator |
-| D6          | Matsusada Reset LED | Active High Output |
-| D7          | HV Enable Switch | Active Low Input | 
-| D10         | 3 kV HV Output Enable Switch | Active Low Input |
-| D11         | Arm Beams Switch | Active Low Input |
-| D12         | CCS Power Allow Switch | Active Low Input |
-| D13         | Arm 80kV Switch | Active Low Input |
-| D17         | RS-485 R/W Enable | Output |
-| D18         | TX1 | Serial |
-| D19         | RX1 | Serial |
-| D20/D21, **SDA/SCL** | I²C bus  | ADS1115 + LCD backpack |
-| D22-D24     | Logic Arduino Flags, Extra | N/A |
-| D25-D37     | Logic Arduino Flags | Flag Input |
-| 5 V / GND   | Power    | As usual |
+### Common Pins
 
-> **Note:** Logic Arduino Flags are only recieved by the +3kV Monitoring Arduino.  
-> These flags are transmitted to the dashboard, showing the state of the Logic Arduino when an interlock was tripped.
+| Arduino Pin | Purpose | Notes |
+|-------------|---------|-------|
+| `A0` | Current threshold pot input | Internal ADC |
+| `A1` | Voltage threshold pot input | Internal ADC |
+| `D6` | Matsusada reset LED | Used on `ps_id = 1, 2` only |
+| `D7` | HV enable switch input | Common firmware input; for `+3 kV` this is shorted to `D10` on the shield per the dev spec |
+| `D17` | RS-485 direction control | `low = receive`, transceiver controlled by firmware |
+| `D18` | `TX1` | Modbus RTU transmit |
+| `D19` | `RX1` | Modbus RTU receive |
+| `D20` / `D21` | I2C `SDA` / `SCL` | ADS1115 + LCD |
+
+### `+3 kV`-Only Interface Pins
+
+| Arduino Pin | Purpose |
+|-------------|---------|
+| `D8` | Arm 80 kV switch input |
+| `D9` | Logic Arduino ack-back input |
+| `D11` | Arm Beams switch input |
+| `D12` | CCS Power Allow switch input |
+| `D14` | Logic Arduino flags acknowledge |
+| `D22` | Logic Arduino `CCS Power` output state |
+| `D23` | Logic Arduino `Arm Beams` output state |
+| `D24` | Logic Arduino `3 kV Enable` output state |
+| `D25` | Logic Arduino `Nom Op` flag |
+| `D26-D37` | Logic Arduino latched flags |
+
+> Only the `+3 kV` monitor reads Logic Arduino status. The other three monitor Arduinos only report their local supply telemetry and enable state.
 
 ---
 
 ## Software Dependencies
 
-Install via the Arduino Library Manager or add to `platformio.ini`:
+The current source includes:
 
-* **arduino‑timer** — <https://github.com/contrem/arduino-timer>
-* **Adafruit ADS1X15**  
-* **LiquidCrystal_I2C**
-* **ArduinoRS485**
-* **ArduinoModbus**
+- `arduino-timer` — <https://github.com/contrem/arduino-timer>
+- `Wire`
+- `avr/wdt`
+- `LiquidCrystal_I2C`
+- `Adafruit_ADS1X15`
+- A Modbus RTU library that provides `ModbusRtu.h`
 
-Target board: **Arduino Mega 2560** (ATmega2560).
+Target board: `Arduino Mega 2560 Rev 3`
 
 ---
 
-## How the Firmware Works
+## Firmware Overview
 
-### Power Supply Identification
+### Power Supply Selection
 
-Ensure the **ps_id** field is set before flashing the Arduino: 
+Set the `ps_id` constant before compiling:
+
 ```cpp
-// Global ID tracking which arduino this is:
-//   0: -1kV Matsusada
-//   1: +1kV Matsusada
-//   2: +3kV Bertan
-//   3: +20kV Bertan
-const int ps_id = 0;
+/**
+ * POWER SUPPLY IDENTIFIER
+ *      - 1: +1kV Matsusada
+ *      - 2: -1kV Matsusada
+ *      - 3: +20kV Bertan
+ *      - 4: +3kV Bertan
+ */
+const int ps_id = 1;
 ```
 
-### Startup (`setup()`)
+The selected `ps_id` controls:
 
-1. Initialize Serial, I²C, ADS1115, and LCD. 
+- Voltage and current full-scale ratings
+- LCD formatting
+- Whether Matsusada reset logic is enabled
+- Whether the `+3 kV` Logic Arduino interface is enabled
+- The Modbus slave address used on RS-485
 
-2. Set pin modes for interfacing with reset LED, input from switches, etc.
+### Startup Sequence
 
-3. Set multipliers:
+`setup()` performs the following:
 
-| Model | Full‑scale V | Full‑scale I | `voltage_multiplier` | `current_multiplier` |
-|-------|--------------|--------------|----------------------|----------------------|
-| Bertan 205B‑03R |  3 000 V | 10 mA |  3000 | 10 |
-| Bertan 205B‑20R | 20 000 V |  1 mA | 20000 |  1 |
-| Matsusada 1 kV  |  1 000 V | 30 mA |  1000 | 30 |
+1. Starts the USB debug serial port at `9600`
+2. Initializes I2C, the ADS1115, and the LCD
+3. Configures common input pins
+4. Selects supply-specific ratings from `ps_id`
+5. For the `+3 kV` firmware variant, enables all Logic Arduino interface inputs
+6. Starts the Modbus RTU slave on `Serial1` at `9600`
+7. Registers periodic timer callbacks
+8. Enables the AVR watchdog with an `8 s` timeout
 
-4. Register four non‑blocking timers (arduino‑timer):
+### Supply Ratings Used by the Code
 
-| Slot | Callback | Period | Purpose |
-|------|----------|--------|---------|
-| 0 | `read_value()`    | 150 ms | Read ADC & compute engineering units  |
-| 1 | `display_value()` | 200 ms | Update LCD and Serial                 |
-| 2 | `transmit_data()` | 500 ms | Send data to dashboard if called on   |
-| 3 | `clear_display()` | 30 min | `lcd.clear()` to wipe any ghost chars |
+| `ps_id` | Supply | `ratedHV_V` | `ratedI_mA` |
+|---------|--------|-------------|-------------|
+| `1` | `+1 kV Matsusada` | `1000.0` | `30.0` |
+| `2` | `-1 kV Matsusada` | `1000.0` | `30.0` |
+| `3` | `+20 kV Bertan` | `20000.0` | `1.0` |
+| `4` | `+3 kV Bertan` | `3000.0` | `10.0` |
 
-5. Enable the AVR watchdog (`8 s`).
+### Main Loop
 
-### Main Loop (`loop()`)
+The main loop is intentionally small:
 
 ```cpp
-void loop() {
-  wdt_reset();     // kick watchdog
-  timer.tick();    // run any due callbacks
+void loop()
+{
+  wdt_reset(); // Feed dog
+
+  slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+
+  timer.tick();
 }
 ```
 
-No delay() calls — MCU stays responsive.
+Key point: the current firmware does not have a separate `transmit_data()` task. Dashboard communication happens when the Modbus slave is polled.
 
-Memory‑Safety Highlights
-* Zero run‑time heap — no String objects after setup().
+---
 
-* Fixed‑size char[] buffers with snprintf() prevent overflow.
+## Timing Model
 
-* ADC samples kept as int16_t, matching the Adafruit driver.
+The current source registers these timer callbacks:
 
-ADC & Scaling
-* ADS1115 at ±6.144 V → 1 LSB = 0.1875 mV.
+| Callback | Period | Purpose |
+|----------|--------|---------|
+| `read_value()` | `150 ms` | Sample ADCs, update engineering values, update Modbus registers |
+| `display_value()` | `200 ms` | Refresh LCD contents |
+| `clear_display()` | `30 min` | Periodic LCD clear to avoid stale characters |
 
-* Sample rate 860 SPS ensures a fresh reading every 150 ms.
+The older README's `transmit_data()` slot is no longer present in the current implementation.
 
-* Conversions:
-  - HV_set (V)  = potVolts / 5 × V_multiplier  
-  - HV_meas (V) = vmonVolts / 5 × V_multiplier  
-  - I_meas (mA) = imonVolts / 5 × I_multiplier  
+---
 
-Serial Log Format
-Set:  750 V,  HV:  742 V,  I: 0.152 mA
-One line every 200 ms, newline‑terminated.
+## ADC Sampling and Scaling
 
-### Building & Uploading
-#### Arduino CLI
-arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 .
-arduino-cli upload  -p /dev/ttyACM0 --fqbn arduino:avr:mega:cpu=atmega2560 .
-(Or use PlatformIO: platformio run -t upload.)
+The firmware reads three ADS1115 single-ended channels:
 
-#### Extending the Firmware
-* Add a PSU – reserve a new input pin, duplicate the jumper‑detect block, set new multipliers.
-* Change refresh rates – adjust the two timer periods; keep display ≥ read.
-* Alter LCD layout – edit display_value() only; rest of the logic is unaffected.
+- `CH_VSET = 0`
+- `CH_IMON = 1`
+- `CH_VMON = 2`
+
+The code configures:
+
+- `GAIN_TWOTHIRDS`
+- `RATE_ADS1115_860SPS`
+
+It converts raw ADC counts to volts using:
+
+- `VOLTS_PER_COUNT = 0.1875 mV/count`
+
+Then scales to engineering units with the selected supply full-scale values:
+
+- `programmedHV_V = (vsetVolts / 5.0) * ratedHV_V`
+- `measuredHV_V = (vmonVolts / 5.0) * ratedHV_V`
+- `measuredI_mA = (imonVolts / 5.0) * ratedI_mA`
+
+Threshold potentiometers are read from the Mega's internal ADC:
+
+- `A0` -> current threshold
+- `A1` -> voltage threshold
+
+Those are also scaled back to supply-level engineering units for LCD display and Dashboard telemetry.
+
+The code clamps negative or over-range ADS1115 raw values before scaling and clamps outgoing Modbus values to `uint16_t`.
+
+---
+
+## Modbus Register Map
+
+The current firmware exposes one contiguous register array:
+
+- `IREG_COUNT = 5`
+- `DINPUT_COUNT = 20`
+- `TOTAL_REG_COUNT = 25`
+
+### Common Input Registers
+
+| Address | Name | Meaning |
+|---------|------|---------|
+| `0` | `IREG_HEALTH_ADDR` | Reserved, currently unused / TODO |
+| `1` | `IREG_V_SET_ADDR` | Programmed HV, rounded to integer volts |
+| `2` | `IREG_V_READ_ADDR` | Measured HV, rounded to integer volts |
+| `3` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
+| `4` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` reset-event counter |
+
+### Common Boolean / State Registers
+
+| Address | Name | Meaning |
+|---------|------|---------|
+| `5` | `DINPUT_HVENABLE_ADDR` | HV enable switch state |
+| `6` | `DINPUT_RESET_STATE_1KV_ADDR` | Matsusada reset-state indication |
+
+### `+3 kV`-Specific Registers
+
+| Address | Name | Meaning |
+|---------|------|---------|
+| `7` | `DINPUT_ARM80KV_ADDR` | Raw Arm 80 kV switch state |
+| `8` | `DINPUT_ARMBEAMS_ADDR` | Logic Arduino Arm Beams output state |
+| `9` | `DINPUT_CCSPOWER_ADDR` | Logic Arduino CCS Power output state |
+| `10` | `DINPUT_3KV_ENABLE_ADDR` | Logic Arduino 3 kV enable output state |
+| `11` | `DINPUT_NOMOP_FLAG_ADDR` | Logic Arduino Nom Op flag |
+| `12` | `DINPUT_3K_HVENABLE_FLAG_ADDR` | 3 kV enable-related flag |
+| `13` | `DINPUT_ARMBEAMS_FLAG_ADDR` | Arm Beams-related flag |
+| `14` | `DINPUT_CCSPOWER_FLAG_ADDR` | CCS Power-related flag |
+| `15` | `DINPUT_ARM80KV_FLAG_ADDR` | Arm 80 kV-related flag |
+| `16` | `DINPUT_1K_VCOMP_FLAG_ADDR` | `+1 kV` undervoltage flag |
+| `17` | `DINPUT_1K_ICOMP_FLAG_ADDR` | `+1 kV` overcurrent flag |
+| `18` | `DINPUT_NEG_1K_VCOMP_FLAG_ADDR` | `-1 kV` undervoltage flag |
+| `19` | `DINPUT_NEG_1K_ICOMP_FLAG_ADDR` | `-1 kV` overcurrent flag |
+| `20` | `DINPUT_20K_VCOMP_FLAG_ADDR` | `+20 kV` undervoltage flag |
+| `21` | `DINPUT_20K_ICOMP_FLAG_ADDR` | `+20 kV` overcurrent flag |
+| `22` | `DINPUT_3K_VCOMP_FLAG_ADDR` | `+3 kV` undervoltage flag |
+| `23` | `DINPUT_3K_ICOMP_FLAG_ADDR` | `+3 kV` overcurrent flag |
+| `24` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
+
+---
+
+## Supply-Specific Firmware Behavior
+
+### Matsusada Variants (`ps_id = 1, 2`)
+
+The Matsusada variants run `checkMatsusadaResetState()`.
+
+The firmware marks a potential reset state when:
+
+- The HV enable switch is on
+- The programmed voltage is above `1.0 V`
+- Measured voltage is below `0.3 V`
+- Measured current is below `0.3 mA`
+
+It clears that state when the supply appears to recover:
+
+- Measured voltage rises above `1.0 V`, or
+- Measured current rises above `1.0 mA`
+
+The state is reported both on the Matsusada reset LED (`D6`) and in Modbus register `6`.
+
+### `+20 kV` Bertan (`ps_id = 3`)
+
+The `+20 kV` variant uses `kV` formatting on the LCD:
+
+- Set voltage shown with `0.01 kV` formatting
+- Measured voltage shown with `0.01 kV` formatting
+- Threshold voltage shown with `0.1 kV` formatting
+
+For `DINPUT_HVENABLE_ADDR`, the current code treats the `+20 kV` HV enable telemetry as active-high.
+
+### `+3 kV` Bertan (`ps_id = 4`)
+
+The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
+
+- Reads Logic Arduino output-state lines on `D22-D24`
+- Reads logic flags on `D25-D37`
+- Reads raw Arm 80 kV switch state on `D8`
+- Reads Logic Arduino ack-back on `D9`
+- Toggles the flags acknowledge line on `D14`
+
+The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs on `D11` and `D12`, but the published Modbus map currently exposes the Logic Arduino output-state lines on `D22` and `D23` for those functions.
+
+It also runs `check3KVResetState()` and exposes a `3 kV` reset-event counter in Modbus register `4`.
+
+Current implementation detail: the counter increments when:
+
+- `Nom Op` falls and the `+3 kV` undervoltage flag is asserted, or
+- The `+3 kV` overcurrent flag is asserted
+
+It resets to `0` when `Nom Op` rises.
+
+---
+
+## LCD Behavior
+
+`display_value()` updates the LCD with:
+
+- Programmed HV
+- Measured HV
+- Measured current
+- Threshold current and threshold voltage
+
+Formatting differs slightly by supply:
+
+- Matsusadas show signed volt values (`+` or `-`)
+- `+20 kV` shows voltages in `kV`
+- `+3 kV` shows voltages in `V`
+
+The firmware also clears the LCD every `30 minutes` to avoid stale characters.
+
+---
+
+## Build Notes
+
+Compile for:
+
+- Board: `arduino:avr:mega:cpu=atmega2560`
+
+This repository currently contains the firmware source file, but not a complete Arduino project or PlatformIO manifest, so the exact build command depends on how you package the sketch locally.
 
 ## Branching and Pull Request Strategy
 
-Our repository uses a structured branching strategy with two primary branches:
+The repository uses two primary branches:
 
-### `main` Branch
+- `main`: protected and used for approved milestones
+- `develop`: default branch for ongoing work
 
-- Protected by a ruleset requiring pull requests for all updates.
-- Commits on `main` are tagged for important milestones or deployments, allowing easy reference later.
-  - Example: `v1.0` corresponds to the version used in the 3kV High Voltage Test.
+Recommended workflow:
 
-### `develop` Branch
-
-- The default branch for ongoing development.
-- No enforced ruleset, but all changes to `develop` should use pull requests for clarity and review.
-
-### Workflow
-
-1. Always branch from `develop`.
-   - **Bug fixes:** `bugfix/your-fix-description`
-   - **New features:** `feature/your-feature-description`
-
-2. Create a draft pull request early to facilitate discussion and feedback during development.
-3. Pull requests must be reviewed and approved by at least one other coder before merging.
-
-### Pull Request Guidelines
-
-- Keep pull requests focused and clean:
-  - Avoid unrelated changes (e.g., unnecessary whitespace or formatting changes) unless explicitly intended.
-  - Clearly document your changes to aid review.
-
-Following this structure helps maintain clear version history, effective collaboration, and high-quality code.
+1. Branch from `develop`
+2. Keep changes focused
+3. Open a PR for review before merging
