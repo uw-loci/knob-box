@@ -1,642 +1,360 @@
-# Knob Box Operating User Manual
+# Knob Box Firmware Overview
 
-## 1. Purpose
+This repository contains the two firmware programs that implement the software behavior of the Knob Box:
 
-The Knob Box is a remote control and monitoring interface for the high-voltage hardware used during melt-metal and related beam experiments. It allows an operator outside the lead enclosure to:
+- `monitor_firmware.cpp`
+- `logic_arduino.cpp`
 
-- Set and monitor the output of the `+1 kV` Matsusada power supply
-- Set and monitor the output of the `-1 kV` Matsusada power supply
-- Set and monitor the output of the `+20 kV` Bertan power supply
-- Set and monitor the output of the `+3 kV` Bertan power supply
-- Arm the `+80 kV` Glassman interlock
-- Control `Arm Beams`
-- Control `CCS Power`
-- View local status on front-panel LCDs and indicators
-- Send system status to the Dashboard
-- Automatically force the beams off and remove CCS power when an interlock or fault is detected
+Although the Knob Box contains five Arduino Mega 2560 boards, there are only two firmware codebases:
 
-The Knob Box is not just a convenience panel. It is also part of the beam interlock chain.
+- One shared monitoring firmware image, reused on all four monitoring Arduinos
+- One dedicated logic/interlock firmware image, used only on the Logic Arduino
 
-## 2. What the Knob Box Does
+This README explains the software architecture of the full Knob Box system, the role of each firmware program, and how the firmware interacts with the user, the Dashboard, the Logic Arduino, the `+3 kV` monitor Arduino, the Beam Controller, CCS, and the high-voltage power supplies.
 
-The Knob Box combines two major functions:
+## 1. System Role
 
-- Slow control and monitoring
-  - Each high-voltage supply has a monitoring Arduino that reads set voltage, measured voltage, measured current, threshold settings, and enable state.
-  - These values are shown on the local LCD for that channel and reported to the Dashboard over RS-485.
-- Fast fault response
-  - A dedicated Logic Arduino watches the fast interlock signals.
-  - If a fault is detected, it immediately forces the system to a beam-interlocked condition.
-  - This means the Knob Box can shut off CCS power and command the Beam Controller to keep the grids negative without waiting for the Dashboard.
+The Knob Box is both:
 
-## 3. What the Knob Box Does Not Do
+- A remote operator control and monitoring panel for the `+1 kV`, `-1 kV`, `+3 kV`, and `+20 kV` power supplies
+- A local protection/interlock device that can remove beam permission and cut CCS power without waiting for the Dashboard
 
-- It does not directly control the Glassman output voltage.
-  - The Glassman voltage is controlled through its OEM software.
-- It does not guarantee that AC mains power to every HV supply is off when the Knob Box is off.
-  - The Knob Box power switch disables the controlled HV enable paths.
-  - It does not replace the HV subpanel shutdown sequence.
-- It is not a substitute for the experiment procedure, Glassman operating procedure, or lab safety requirements.
+At a system level, the firmware is intentionally split into two domains:
 
-## 4. Controlled Equipment
+- A slower `monitoring / display / reporting` domain
+- A faster `interlock / protection / output-authority` domain
 
-The Knob Box interfaces with:
+That split is central to understanding the software:
 
-- `+1 kV Matsusada`
-- `-1 kV Matsusada`
-- `+20 kV Bertan`
-- `+3 kV Bertan`
-- `+80 kV Glassman` interlock/arm path
-- `CCS` power shutoff relay
-- `BCON` / Beam Controller interlock input
-- Control workstation Dashboard
+- The monitoring Arduinos measure and report
+- The Logic Arduino decides whether beams and CCS are actually allowed
 
-## 5. Front-Panel Controls and Indicators
+## 2. Firmware Inventory
 
-The operator should expect the following controls and indicators.
+### `monitor_firmware.cpp`
 
-### 5.1 Main Box Controls
+Used on four Arduino Mega boards, one per power supply:
 
-- `Knob Box Power Switch`
-  - Powers the electronics inside the Knob Box.
-  - When this switch is off, the controlled HV enable lines default to off.
-- `Power LED`
-  - Indicates that the Knob Box itself is powered.
-- `Interlocks Tripped LED`
-  - Indicates that the Logic Arduino is not in normal operation.
-  - When this LED is on, the system is beam-interlocked.
-- `Reset Interlocks Button`
-  - Used to move the Logic Arduino into normal operation, but only if all interlocks are currently clear.
+- `ps_id = 1`: `+1 kV Matsusada`
+- `ps_id = 2`: `-1 kV Matsusada`
+- `ps_id = 3`: `+20 kV Bertan`
+- `ps_id = 4`: `+3 kV Bertan`
 
-  ### 5.2 System Switches
+Core jobs:
+
+- Read `Vset`, `Vmon`, and `Imon` through an ADS1115
+- Read local threshold trim pots through the Mega ADC
+- Update the local `20x4` LCD
+- Serve telemetry to the Dashboard over `RS-485 / Modbus RTU`
+- On the Matsusada variants, infer a likely internal reset-required condition
+- On the `+3 kV` variant, act as the software gateway between the Logic Arduino and the Dashboard
+
+### `logic_arduino.cpp`
+
+Used on one dedicated Arduino Mega board:
+
+- The `Logic Arduino`
+
+Core jobs:
+
+- Sample the hardwired comparator outputs for all four HV supplies
+- Sample the operator intent switches used by the interlock path
+- Decide whether the system is in `Beam Interlock`, `Normal Operation`, or `3 kV Timer`
+- Drive the real `CCS Power Enable`, `Arm Beams`, and `3 kV Enable` outputs
+- Publish latched interlock information to the `+3 kV` monitor Arduino
+
+## 3. System Architecture
+
+
+User
+  - front-panel knobs, switches, reset button
+
+HV Power Supplies
+  - provide Vset / Vmon / Imon monitor signals to monitoring Arduinos
+  - provide monitor signals to comparators for fast fault detection
+
+Monitoring Arduinos (4x)
+  - show local LCD data
+  - expose telemetry to Dashboard over RS-485 / Modbus
+  
++3 kV Monitoring Arduino also:
+  - monitors its own supply
+  - reads Logic Arduino outputs, flags, and raw switch-intent lines
+  - republishes that logic state to the Dashboard via Modbus
+
+Logic Arduino
+  - reads comparators + interlock-related switches
+  - controls actual CCS, Beam Enable, and 3 kV enable outputs
+  - exports interlock status to the +3 kV monitor Arduino
+
+Dashboard
+  - remote visibility, polling, logging, and operator awareness
+  - not the primary protection path
+
+## 4. Who Talks To Whom
+
+| System / Actor | Firmware interaction |
+|---|---|
+| User | Moves HV enable switches, `Arm 80 kV`, `Arm Beams`, `CCS Power`, and `Reset Interlocks`; adjusts voltage knobs and threshold pots; reads LCDs and panel indicators |
+| Dashboard | Polls the monitoring Arduinos over `RS-485 / Modbus RTU`; receives telemetry, switch state, interlock state, and `+3 kV` logic status |
+| HV power supplies | Provide analog telemetry (`Vset`, `Vmon`, `Imon`); receive enable control signals; Matsusadas also have reset handling via the panel |
+| Logic Arduino | Consumes comparator and switch inputs; drives actual safety-critical outputs; publishes interlock status to the `+3 kV` monitor |
+| `+3 kV` monitor Arduino | Reads Logic Arduino output mirrors, latched flags, raw switch states, and heartbeat handshake pins; republishes them to the Dashboard |
+| Beam Controller / BCON | Receives the real beam-enable / beam-interlock signal from the Logic Arduino |
+| CCS relay path | Receives the real CCS enable signal from the Logic Arduino |
+| Glassman `+80 kV` interlock path | User-controlled arm switch is read by the Logic Arduino and is required before entering normal operation |
+
+## 5. Monitoring Firmware Role
+
+The monitoring firmware is the operator-facing and Dashboard-facing side of the Knob Box software.
+
+### Common monitoring behavior
+
+All four monitoring variants do the following:
+
+- Sample `Vset`, `Vmon`, and `Imon` from an ADS1115
+- Convert raw readings into engineering values using supply-specific full-scale ratings
+- Read the current and voltage threshold trim pots from `A0` and `A1`
+- Update a local `20x4` LCD
+- Populate a Modbus register map
+- Serve that register map on `Serial1` through the RS-485 transceiver
+
+The current implementation uses:
+
+- `timer.every(150, read_value)`
+- `timer.every(200, display_value)`
+- `slave.poll(modbus_regs, TOTAL_REG_COUNT)` in the main loop
+
+That means the Dashboard path is polling-based and slower than the Logic Arduino interlock loop, by design.
+
+### Supply-specific monitoring behavior
+
+| Variant | Extra behavior |
+|---|---|
+| `+1 kV Matsusada` | Infers a likely Matsusada internal reset-required state and drives the reset-state LED |
+| `-1 kV Matsusada` | Same reset-state inference behavior as the `+1 kV` unit |
+| `+20 kV Bertan` | Uses different LCD formatting |
+| `+3 kV Bertan` | Acts as the Logic Arduino's Modbus bridge to the Dashboard |
+
+### Modbus role
+
+The monitoring firmware is the only firmware that speaks Modbus.
+
+Important consequence:
+
+- The Logic Arduino does not talk directly to the Dashboard
+- The Dashboard only sees Logic Arduino state because the `+3 kV` monitor Arduino reads it and republishes it
+
+In the current code, the Modbus slave address is the `ps_id`, so the four boards are intended to appear as four addressed devices on the shared RS-485 bus.
+
+## 6. Logic Firmware Role
+
+The Logic Arduino is the fast local authority for beam permission and interlock enforcement.
+
+### What it reads
+
+The Logic Arduino reads:
+
+- `8` comparator outputs, one current and one voltage comparator for each HV supply
+- `3 kV Enable` switch
+- `Arm Beams` switch
+- `CCS Power Allow` switch
+- `Arm 80 kV` switch
+- `Reset Interlocks` button
+- The flag-acknowledge line coming back from the `+3 kV` monitor Arduino
+
+Comparator behavior is intentionally fail-safe:
+
+- `LOW = safe`
+- `HIGH = fault / interlock`
+- Open or disconnected comparator wiring is treated as fault because the Logic Arduino pull-up makes the input read high
+
+### What it controls
+
+The Logic Arduino drives the real output authority signals:
+
+- `A0`: `CCS Power Enable`
+- `A1`: `Beam Enable` / `Arm Beams` to BCON
+- `A2`: `3 kV HV Enable`
+
+These are the outputs that matter electrically. The front-panel switches for `CCS Power` and `Arm Beams` are requests, not guarantees.
+
+### Current state machine
+
+| State | Behavior |
+|---|---|
+| `STATE_INTERLOCK` | Default safe/interlocked state; CCS off, beams off, `3 kV` output follows the `3 kV Enable` switch |
+| `STATE_NOM_OP` | Only state in which `CCS Power` and `Arm Beams` requests are honored |
+| `STATE_3KV_TIMER` | Special `+3 kV` lockout state; CCS off, beams off, `3 kV` forced off for `100 ms` |
+
+### Entry / exit behavior
+
+Current code behavior:
+
+- Startup enters `STATE_INTERLOCK`
+- Enter `STATE_NOM_OP` only when:
+  - all comparators are safe
+  - `Arm 80 kV` is asserted
+  - `3 kV Enable` is asserted
+  - the user presses `Reset Interlocks`
+- Any interlock fault drops the system out of `STATE_NOM_OP`
+- `3 kV` overcurrent in interlock state can retrigger the `3 kV` timer
+- `3 kV` undervoltage or overcurrent in normal operation sends the system to the `3 kV` timer
+
+This matches the operating-manual concept that the Knob Box starts interlocked, must be intentionally reset into nominal operation, and can momentarily cycle the `3 kV` enable to help quench a suspected arc.
+
+## 7. Logic Arduino and `+3 kV` Monitor Arduino Interaction
+
+This is the most important software interface in the system.
+
+### High-level purpose
+
+The Logic Arduino uses the `+3 kV` monitor Arduino as its indirect communication path to the Dashboard via Modbus.
+
+That arrangement exists because:
+
+- The Logic Arduino is optimized for fast deterministic digital sampling and output control
+- Direct serial / Modbus traffic would work against that goal
+- The `+3 kV` monitor Arduino can tolerate slower periodic polling and reporting
+
+### Signals exported from the Logic Arduino
+
+The Logic Arduino exports two kinds of information to the `+3 kV` monitor:
+
+#### Live state outputs
+
+- `D22-D24`: mirrors of the current output states for `CCS`, `Arm Beams`, and `3 kV Enable`
+- `D25`: `Nom Op` flag
+
+#### Latched event / fault flags
+
+- `D26-D29`: latched switch-related flags
+- `D30-D37`: latched comparator fault flags
+
+In the current implementation, these latched flags persist until the `+3 kV` monitor acknowledges that it has read them.
+
+### Raw switch intent lines also seen by the `+3 kV` monitor
+
+The `+3 kV` monitor directly reads:
 
 - `Arm 80 kV`
-  - Arms the Glassman interlock path
-  - Does not itself ramp or program the Glassman output
-- `CCS Power`
-  - Requests power to CCS through the CCS relay
+- `3 kV Enable`
 - `Arm Beams`
-  - Requests that BCON be allowed to make the grids positive
+- `CCS Power`
 
-### 5.3 Per-Supply Controls
+This is important because it lets the Dashboard distinguish:
 
-Each monitored power-supply section includes the following:
+- what the user requested at the panel
+- from what the Logic Arduino is actually allowing at the outputs
 
-- `HV Enable Switch`
-- `Voltage Control Knob`
-- `Voltage Threshold Trim Pot`
-- `Current Threshold Trim Pot`
-- `20x4 LCD`
+### ACK / ACK-back handshake
 
-The LCD displays the channel's:
+The two boards use a simple handshake so the monitor can both clear latched flags and confirm that the Logic Arduino is still alive.
 
-- Set voltage
-- Measured voltage
-- Measured current
-- Trip thresholds
-    - Interlock trips if measured current is **above** threshold current
-    - Interlock trips if measured voltage is **below** threshold voltage
+#### `D14`: ACK from monitor to logic
 
-### 5.4 Matsusada-Specific Controls
+The `+3 kV` monitor toggles the acknowledge line after it reads the Logic Arduino status.
 
-Each Matsusada section also includes:
+Current implementation detail:
 
-- `Overcurrent Reset Button`
-  - Sends the Matsusada reset signal after a Matsusada internal overcurrent lockout
-- `Reset-State LED`
-  - Indicates that the supply appears to be in a Matsusada reset/lockout condition
+- The monitor alternates `D14` between `LOW` output and `INPUT` high-impedance
+- The Logic Arduino treats any change on `D14` as an ACK edge
 
-Important:
+#### `D9`: ACK-back from logic to monitor
 
-- This reset-state indication is inferred from operating behavior.
-- It is not a direct status pin from the Matsusada.
+When the Logic Arduino sees the ACK edge:
 
-## 6. Key Operating Concept: Switch Intent vs Actual Output
+- it clears the latched event history
+- it toggles `D9`
 
-Some front-panel switches represent operator intent, not a guaranteed live output.
+The `+3 kV` monitor samples `D9` on its periodic cycle. If `D9` changed since the previous sample, it sets the `logic alive` status in the Modbus map.
 
-In particular:
+### Why this matters
 
-- `Arm Beams` can be switched on while the Logic Arduino still forces beams off
-- `CCS Power` can be switched on while the Logic Arduino still keeps CCS power off
-- `3 kV Enable` can be switched on while the Logic Arduino temporarily disables the actual 3 kV output during fault handling
+This interface gives the Dashboard three classes of logic-related information:
 
-If the Knob Box is not in normal operation, the Logic Arduino overrides those requests and forces the safe state.
+- Real-time logic output state
+- Latched recent interlock history
+- A proof-of-life indication that the Logic Arduino is still executing
 
-Practical rule:
+## 8. Software Meaning of the Front Panel
 
-- If `Interlocks Tripped` is on, assume `beams are off` and `CCS is off` no matter what the related switch LEDs say.
+The code and operating manual both make a key distinction:
 
-## 7. Logic States
+- Some controls are direct local operator intent
+- Some states are actual logic-authorized outputs
 
-The Logic Arduino operates in three user-visible modes.
+### Direct operator intent
 
-### 7.1 Beam Interlock State
+- HV enable switches
+- `Arm 80 kV`
+- `Arm Beams`
+- `CCS Power`
+- Reset buttons
+- Threshold trim pots
+- Voltage set knobs
 
-This is the default startup state and the fallback fault state.
+### Logic-authorized outputs
 
-Behavior:
+- Actual `CCS Power Enable`
+- Actual `Arm Beams` / BCON permission
+- Actual `3 kV` enable
 
-- CCS output forced off
-- Beam enable forced off
-- 3 kV output follows its special interlock logic
-- Interlocks Tripped LED on
+This means the user can place `Arm Beams` or `CCS Power` switches in the `ON` position while the system still behaves as OFF because the Logic Arduino is holding the safe state.
 
-This state is expected:
+That distinction is one of the main reasons the `+3 kV` monitor forwards both raw switch state and logic output state to the Dashboard.
 
-- At startup
-- During ramp-up before all supplies are at nominal values
-- After a fault
-- After intentionally taking a required interlock out of spec
+## 9. Interaction With External Systems
 
-### 7.2 Normal Operation State
+### User
 
-This is the only state in which the `Arm Beams` and `CCS Power` requests are allowed to take effect.
+The user interacts with the firmware through:
 
-Requirements to enter normal operation:
+- Front-panel switches
+- Front-panel knobs and threshold trim pots
+- The `Reset Interlocks` button
+- LCDs and panel indicators
+- The remote Dashboard
 
-- All monitored interlocks must be clear
-- `Arm 80 kV` must be on
-- `3 kV Enable` must be on
-- The operator must press `Reset Interlocks`
+The user requests operating intent. The Logic Arduino decides whether the request is allowed to become a real output.
 
-Once in normal operation:
+### Dashboard
 
-- CCS enable follows the `CCS Power` switch
-- Beam enable follows the `Arm Beams` switch
-- 3 kV output follows the `3 kV Enable` switch unless a 3 kV trip occurs
+The Dashboard is the remote visibility and logging path.
 
-### 7.3 3 kV Timer State
+The firmware supports the Dashboard by:
 
-This state is unique to the `+3 kV Bertan`.
+- Reporting per-supply telemetry from all four monitoring Arduinos
+- Reporting `logic arduino` logic/interlock state through the `+3 kV` monitor's Modbus register map
+- Exposing global and per-channel status with slower, periodic updates
 
-Behavior:
+The Dashboard is not the first-line protection path. The firmware is designed so that interlock action occurs locally first and Dashboard awareness follows.
 
-- CCS forced off
-- Beam enable forced off
-- 3 kV enable forced off
-- A `100 ms` timeout is applied to help extinguish a possible arc
+### Power supplies
 
-Current intended behavior:
+The firmware interacts with the power supplies in two different ways:
 
-- A `3 kV` overcurrent or undervoltage trip during normal operation sends the system into the 3 kV timer behavior.
-- While the system is already interlocked, `3 kV undervoltage` alone is expected during startup or ramping and does not retrigger the timer.
-- While interlocked, a continuing `3 kV overcurrent` can retrigger the timer behavior, resulting in repeated `100 ms` disable cycles until the overcurrent condition clears.
+- Monitoring Arduinos read analog status signals (`Vset`, `Vmon`, `Imon`)
+- Logic firmware evaluates fast comparator outputs derived from those signals
 
-This is expected behavior, not a malfunction.
+### CCS
 
-## 8. What Counts as an Interlock or Fault
+CCS power permission is software-controlled through the Logic Arduino.
 
-The Knob Box continuously monitors:
+The practical behavior is:
 
-- `+1 kV` undervoltage
-- `+1 kV` overcurrent
-- `-1 kV` undervoltage
-- `-1 kV` overcurrent
-- `+20 kV` undervoltage
-- `+20 kV` overcurrent
-- `+3 kV` undervoltage
-- `+3 kV` overcurrent
-- `Arm 80 kV` status
-- `3 kV Enable` status
+- User switch asks for CCS power
+- Logic Arduino only asserts the real CCS enable output when the system is in normal operation
+- Any interlock removes that enable
 
-These conditions feed the Logic Arduino and determine whether the box is allowed to stay in normal operation.
+### Beam Controller / BCON
 
-## 9. What Happens on a Fault
+The Beam Controller receives the beam-permission signal from the Logic Arduino.
 
-If an interlock trips:
+Through this, the Knob Box can rapidly force beam suppression on an interlock event.
 
-1. The Logic Arduino leaves normal operation.
-2. `Arm Beams` output is forced off.
-3. `CCS Power` output is forced off.
-4. The `Interlocks Tripped` LED turns on.
-5. The relevant fault indications are reported to the `3 kV` monitoring Arduino and then to the Dashboard.
+### Glassman `+80 kV`
 
-If the fault is a `3 kV` fault:
+The `Arm 80 kV` switch is a required interlock input to the Logic Arduino.
 
-- The `3 kV` output is also disabled for about `100 ms`.
-- If overcurrent persists, additional timer cycles can occur.
-
-To recover:
-
-1. Identify and correct the cause.
-2. Confirm the interlock condition has cleared.
-3. Press `Reset Interlocks`.
-
-If the underlying fault is still present, pressing reset will not restore normal operation.
-
-## 10. Matsusada Reset-State Behavior
-
-The Matsusadas have their own internal protection behavior.
-
-If a Matsusada internally trips on overcurrent:
-
-- The supply may disable its own HV output
-- The Knob Box may see:
-  - HV enable requested
-  - Set voltage above near-zero
-  - Measured voltage near zero
-  - Measured current near zero
-
-When that pattern appears:
-
-- The Matsusada reset-state LED turns on
-- The channel should be treated as likely needing a manual reset
-- The global interlock will also likely trip because the voltage is too low
-
-Recovery:
-
-1. Verify the cause of the overcurrent has been addressed.
-2. Press the correct Matsusada `Overcurrent Reset` button on the Knob Box.
-3. Confirm the reset-state LED goes away.
-4. Re-establish normal conditions.
-5. Press `Reset Interlocks` if needed.
-
-Important quirk:
-
-- The Matsusada reset-state LED is a smart inference, not a direct hardware truth signal.
-
-## 11. Dashboard Behavior
-
-The Dashboard is the main remote status view for the operator.
-
-It is expected to show:
-
-- Per-supply measured voltage
-- Per-supply measured current
-- Per-supply set voltage
-- HV enable state
-- `Arm 80 kV` status
-- `Arm Beams` status
-- `CCS Power` status
-- Global interlock state
-- Individual interlock indications
-- Event history / logging
-
-Important notes:
-
-- Threshold settings are local to the Knob Box and are shown on the LCDs.
-- Interlock handling happens in hardware/firmware before the Dashboard updates.
-- The Dashboard is for monitoring and logging, not first-line protection.
-
-## 12. LCD Behavior
-
-Each monitoring Arduino updates a local `20x4` LCD for its power supply.
-
-Typical display items:
-
-- Set voltage
-- Measured voltage
-- Measured current
-- Threshold line
-
-Formatting differs by channel:
-
-- `+1 kV`, `-1 kV`, and `+3 kV` are shown in volts
-- `+20 kV` uses kilovolt formatting for voltage
-
-The LCD is the easiest place to set and verify local threshold trim pots during bring-up.
-
-## 13. Normal Startup and Bring-Up Procedure
-
-This section assumes the system is being prepared for normal operation in the melt-metal configuration.
-
-### 13.1 Before Applying Power
-
-Verify:
-
-- All required cables are connected:
-  - Both Matsusadas
-  - Both Bertans
-  - Glassman interlock connection
-  - CCS shutoff cable
-  - Beam Controller cable
-  - Dashboard/workstation connection
-- Knob Box grounding is in place
-- All HV enable switches are off
-- All front-panel voltage knobs are at zero
-- `CCS Power` is off
-- `Arm Beams` is off
-- `80 kV` Glassman breaker is open/off
-
-### 13.2 Energize the HV Subpanel
-
-Turn on the HV subpanel through the normal facility procedure.
-
-Expected behavior:
-
-- Most HV supplies may now have AC mains available
-- The `80 kV` Glassman remains unpowered if its breaker is still open
-- HV outputs remain disabled because the Knob Box has not yet been used to enable them
-
-### 13.3 Power On the Knob Box
-
-Turn on the Knob Box.
-
-Expected behavior:
-
-- The box powers up in `Beam Interlock State`
-- Dashboard begins reading values and switch states
-- HV outputs remain off until each one is intentionally enabled
-
-This startup interlocked condition is normal.
-
-### 13.4 Ramp the Four Main Supplies Sequentially
-
-Recommended order:
-
-1. `-1 kV Matsusada`
-2. `+1 kV Matsusada`
-3. `+3 kV Bertan`
-4. `+20 kV Bertan`
-
-For each channel:
-
-1. Confirm voltage set knob is at zero before enabling.
-2. Adjust current and voltage threshold trim pot values displayed on the channel LCD.
-3. Turn the channel HV enable switch on.
-4. Slowly raise the voltage to the desired setpoint.
-5. Confirm expected readings on the Dashboard and LCD.
-
-Notes:
-
-- Ramp slowly.
-- The system may remain interlocked during ramp-up because undervoltage conditions are expected before nominal voltage is reached.
-- That is normal and does not mean anything is wrong.
-
-### 13.5 Arm the Glassman Before Applying Its AC Power
-
-Once the other supplies are at nominal values:
-
-1. Turn `Arm 80 kV` on at the Knob Box.
-2. Confirm the armed state is visible locally and on the Dashboard.
-
-Important:
-
-- The Glassman should be armed before applying its `220 VAC`.
-- Breaking the intended order can require a manual reset at the Glassman.
-
-### 13.6 Optional Pulse Test Before Glassman AC Power
-
-With:
-
-- the other supplies at nominal values
-- Glassman armed
-- Glassman AC still off
-
-you may perform the recommended pulse test.
-
-During this step:
-
-- `CCS Power` must remain off
-- `Arm Beams` can be turned on for the pulse test
-- `Interlocks Tripped` may still be on from the ramp-up history
-- Press `Reset Interlocks` once all required conditions are actually satisfied
-
-Expected result:
-
-- Individual beam pulses can be tested while keeping CCS off
-
-### 13.7 Bring Up the Glassman
-
-After the pre-pulse checks:
-
-1. Apply the Glassman AC power using the correct breaker.
-2. Start the Glassman OEM software.
-3. Confirm communications.
-4. Set low voltage first.
-5. Enable HV in the OEM software.
-6. Slowly ramp toward the desired operating voltage.
-
-The Knob Box does not replace the Glassman OEM control path for output programming.
-
-## 14. Entering Full Operating Condition
-
-When all required HV supplies are at nominal values and all interlocks are clear:
-
-1. Confirm `Arm 80 kV` is on.
-2. Confirm `3 kV Enable` is on.
-3. Press `Reset Interlocks`.
-
-If successful:
-
-- `Interlocks Tripped` turns off
-- The Knob Box is now in normal operation
-- `Arm Beams` and `CCS Power` requests are allowed to take effect
-
-To begin cathode heating:
-
-1. Turn `CCS Power` on
-2. Confirm CCS communication and expected status
-
-To allow beam operation:
-
-1. Turn `Arm Beams` on
-2. Confirm the expected beam-control status
-
-## 15. Expected Behavior During Normal Operation
-
-During normal operation:
-
-- The Knob Box continuously watches for undervoltage and overcurrent events
-- If a monitored HV channel goes out of limits, the system immediately interlocks
-  - BCON is forced to keep the grids negative
-  - CCS power is removed
-
-This behavior is intentional and protective.
-
-The operator should expect:
-
-- Fast protective action from the box itself
-- Slightly slower status updates on the Dashboard
-- Logged evidence of which interlocks were active
-
-## 16. Expected Behavior During Ramping
-
-During initial ramp-up or after intentional changes:
-
-- The box may show an interlocked condition until all required channels are within threshold
-- The `Interlocks Tripped` LED may remain on even though you are still in a normal setup sequence
-- This is expected because low voltage during ramping looks the same as undervoltage from the logic point of view
-
-Normal operator response:
-
-1. Finish bringing the system to the intended condition.
-2. Confirm all required channels are truly within limits.
-3. Press `Reset Interlocks`.
-
-## 17. Expected Behavior of the 3 kV Channel
-
-The `+3 kV Bertan` is special.
-
-Important behaviors:
-
-- Its physical switch is not the final output authority.
-- The Logic Arduino controls the actual `3 kV` enable path.
-- A `3 kV` trip can temporarily turn the output off even if the physical switch remains on.
-
-What the operator may observe:
-
-- A `3 kV` fault causes immediate interlocking of beams and CCS
-- The `3 kV` output is dropped for about `100 ms`
-- If overcurrent persists, the Knob Box may continue repeating the timeout cycle
-
-What this means in practice:
-
-- Repeated 3 kV enable cycling usually points to a continuing overcurrent/arc condition
-- Do not treat this as random behavior
-- Investigate the cause before trying to force the system back into normal operation
-
-## 18. Expected Behavior of Arm Beams and CCS Power
-
-`Arm Beams` and `CCS Power` are both controlled by the Logic Arduino.
-
-That means:
-
-- Their switches can be on while their real outputs are off
-- Their indicator lights can represent the switch request even when the logic is suppressing the output
-
-Always interpret them together with the interlock state:
-
-- `Interlocks Tripped` off:
-  - switch request can take effect
-- `Interlocks Tripped` on:
-  - outputs are suppressed regardless of switch position
-
-## 19. Shutdown Procedure
-
-Recommended shutdown order:
-
-1. Turn `Arm Beams` off.
-2. Turn `CCS Power` off after cathodes have cooled enough.
-3. Ramp down the Glassman using OEM software.
-4. Disable Glassman output in OEM software.
-5. De-arm `Arm 80 kV`.
-6. Ramp down the remaining supplies in decreasing-voltage order.
-7. Turn off each HV enable switch after its voltage reaches zero.
-8. Optionally leave the Knob Box on for a short period to continue monitoring.
-9. Turn off the Knob Box.
-10. Turn off the HV subpanel / open the Glassman breaker as required.
-
-Important:
-
-- Turning off the Knob Box is not a substitute for bringing voltages to zero in a controlled way.
-
-## 20. Common Operator Questions
-
-### 20.1 Why is the Interlocks Tripped LED on during startup?
-
-Because the box starts interlocked by design. It does not start in beam-enabled mode.
-
-### 20.2 Why is the Interlocks Tripped LED on while I am ramping supplies up?
-
-Because undervoltage during ramp-up is treated as out-of-spec until the channel reaches its threshold.
-
-### 20.3 Why doesn't pressing Reset Interlocks do anything?
-
-Because at least one required interlock is still active.
-
-### 20.4 Why can the Arm Beams or CCS switch look on while the system still behaves off?
-
-Because those switches are requests. The Logic Arduino can override them when the system is interlocked.
-
-### 20.5 Why did the 3 kV output turn off even though I did not touch its switch?
-
-Because the Logic Arduino detected a `3 kV` fault and intentionally cycled the output to extinguish a possible arc.
-
-### 20.6 Why is a Matsusada reset LED on?
-
-Because the monitoring firmware believes that Matsusada may be in its internal lockout/reset-required state.
-
-## 21. Troubleshooting Guide
-
-### 21.1 Interlocks Tripped Will Not Clear
-
-Check:
-
-- Are all four monitored supplies actually at their intended voltage?
-- Is `Arm 80 kV` on?
-- Is `3 kV Enable` on?
-- Is a comparator threshold set too aggressively?
-- Is a Matsusada in a reset-required state?
-- Is the `3 kV` channel still indicating a continuing fault?
-
-Then:
-
-1. Correct the issue.
-2. Verify it on LCD/Dashboard.
-3. Press `Reset Interlocks`.
-
-### 21.2 3 kV Seems to Be Cycling Repeatedly
-
-Likely causes:
-
-- Persistent `3 kV` overcurrent
-- Continuing arc behavior
-- Bad threshold setting
-- Wiring or grounding issue
-
-Recommended response:
-
-1. Stop trying to operate normally.
-2. Reduce or disable the relevant HV.
-3. Inspect for arc causes or bad settings.
-4. Only reset after the cause is understood.
-
-### 21.3 Matsusada Has Enable On but No Output
-
-Possible cause:
-
-- Matsusada internal overcurrent trip / reset-required state
-
-Recommended response:
-
-1. Verify the voltage is commanded above zero.
-2. Verify measured voltage and current remain near zero.
-3. Press the corresponding Matsusada reset button.
-4. Re-check output and reset LED.
-
-### 21.4 Dashboard and Panel Seem Briefly Out of Sync
-
-This can happen because:
-
-- The fast logic interlock reacts first
-- Monitoring and communications update afterward
-
-If there is disagreement during a fast event:
-
-- Trust the protective behavior first
-- Then confirm the post-event state on the Dashboard
-
-## 22. Feature Quirks and Non-Obvious Behaviors
-
-- The Knob Box starts in an interlocked state every time it powers up.
-- Ramping a supply from zero to nominal will usually create a temporary undervoltage condition that must later be cleared with `Reset Interlocks`.
-- `Arm 80 kV` is required before entering normal operation.
-- The `+3 kV` channel is intentionally special and may be cycled automatically by the logic.
-- A Matsusada reset-state indication is inferred, not directly reported by the supply.
-- The LCDs are the local place to read threshold settings.
-- The Dashboard is slightly slower than the fast interlock path.
-- If the Knob Box loses power, the controlled HV enable paths default to off.
-
-## 23. Practical Good Habits
-
-- Always begin with all HV enable switches off and all voltage knobs at zero.
-- Ramp each supply slowly and deliberately.
-- Use the LCDs while adjusting thresholds.
-- Do not treat an interlock as a nuisance alarm; find the cause.
-- Keep `CCS Power` off during the recommended pre-Glassman pulse test.
-- Always arm the Glassman before applying its AC power.
-- When in doubt, return the system to a known low-energy state before troubleshooting.
-
-## 24. Summary
-
-The Knob Box is the operator-facing control point for the HV supplies, beam arming logic, and CCS shutoff path. It is designed to let the operator work remotely while also providing automatic protection against undervoltage, overcurrent, and configuration errors.
-
-To use it correctly:
-
-- Think of the front-panel switches as requests
-- Think of the Logic Arduino as the final authority for beam and CCS permission
-- Expect interlocks during startup and ramping
-- Use `Reset Interlocks` only after the system is truly in-range
-- Treat repeated `3 kV` cycling or Matsusada reset indications as meaningful diagnostic information
+The system must see this armed condition before it will enter normal operation.
