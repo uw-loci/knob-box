@@ -185,6 +185,14 @@ static inline int16_t clamp_i16_positive(float x)
  * From HW Dev Spec: A potential reset state is determined if the output enable switch is on, 
  * the potentiometer set voltage is greater than a near zero threshold, but both the actual 
  * current and actual voltage are at near zero values.
+ * 
+ * The matsusada will enter into a reset state after an overcurrent event. This state will 
+ * disable the HV enable functionality and can only be cleared by shorting the reset pins on
+ * the DB25 connector on the back of the power supply. This logic is intended to detect when
+ * the power supply is in this state, so the dashboard can alert the user and guide them to reset.
+ * 
+ * Toggling HV Enable will NOT clear the reset state -- the user must short the reset pins by
+ * hitting the physical matsusada momentary reset switch on the front of the knob box.
  */
 void checkMatsusadaResetState() {
     bool hvEnabled = digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
