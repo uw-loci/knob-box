@@ -19,6 +19,17 @@
  */
 const int ps_id = 1;
 
+// Capture reset cause and stop any inherited watchdog before normal startup runs.
+// This follows the standard avr-libc early-startup watchdog pattern.
+uint8_t resetCauseMirror __attribute__((section(".noinit")));
+void watchdog_early_init(void) __attribute__((naked)) __attribute__((section(".init3"))) __attribute__((used));
+
+void watchdog_early_init(void) {
+    resetCauseMirror = MCUSR;
+    MCUSR = 0;
+    wdt_disable();
+}
+
 //============= MODBUS MAP ==================================
 //===========================================================
 /*
@@ -544,7 +555,7 @@ void setup()
 
     timer.every(150, read_value);
     timer.every(200, display_value);
-    timer.every(1000*60*30, clear_display); // every 30 minutes
+    timer.every(1000UL*60UL*30UL, clear_display); // every 30 minutes
 
     wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 

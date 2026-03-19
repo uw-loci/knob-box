@@ -103,7 +103,12 @@ The selected `ps_id` controls:
 5. For the `+3 kV` firmware variant, enables all Logic Arduino interface inputs
 6. Starts the Modbus RTU slave on `Serial1` at `9600`
 7. Registers periodic timer callbacks
-8. Enables the AVR watchdog with an `8 s` timeout
+8. Re-enables the AVR watchdog with an `8 s` timeout near the end of `setup()`
+
+The firmware uses the AVR watchdog in two stages:
+
+- Early startup (`.init3`): capture `MCUSR`, clear it, and disable any watchdog inherited from a prior reset before normal Arduino startup runs.
+- Runtime: enable the `8 s` watchdog near the end of `setup()` after peripheral initialization is complete, then refresh it once per `loop()`.
 
 ### Supply Ratings Used by the Code
 
