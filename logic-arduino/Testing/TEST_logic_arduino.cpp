@@ -19,8 +19,8 @@
   - Type "help" for commands.
 
   INPUT/OUTPUT MAP (matches your Logic Arduino final design)
-  Live state flags on PORTA:
-    3kV Timer State              N/A -> Flag D26 (PA4)
+  Latched timer-event flag on PORTA:
+    3kV Timer Event              N/A -> Flag D26 (PA4)
 
   Switches (Logic input, asserted=LOW) latched to PORTA upper bits:
     Arm Beams Switch             D11 -> Flag D27 (PA5)
@@ -211,7 +211,7 @@ static inline bool isNomOpFromFlags(const Observe& o) {
 }
 
 static inline bool is3kVTimerFromFlags(const Observe& o) {
-  return (o.porta & (1u << PORTA_BIT_3KVTIMER)) != 0; // D26 = bit4
+  return (o.porta & (1u << PORTA_BIT_3KVTIMER)) != 0; // D26 = bit4, latched timer-event flag
 }
 
 // Friendly OBS print (pins + register bits + names)
@@ -226,8 +226,8 @@ static void printObserveDetailed(const Observe& o) {
   Serial.print(F("  D24 (PA2 bit2): A2 mirror (3kV Enable) = ")); Serial.println((o.porta & (1u<<2)) ? F("1") : F("0"));
   Serial.print(F("  D25 (PA3 bit3): Nom Op flag = "));
   Serial.println((o.porta & (1u<<3)) ? F("1 (NOM_OP)") : F("0 (INTERLOCK/TIMER)"));
-  Serial.print(F("  D26 (PA4 bit4): 3kV timer flag = "));
-  Serial.println((o.porta & (1u<<4)) ? F("1 (STATE_3KV_TIMER)") : F("0"));
+  Serial.print(F("  D26 (PA4 bit4): latched 3kV timer-event flag = "));
+  Serial.println((o.porta & (1u<<4)) ? F("1 (timer event seen since ACK)") : F("0"));
 
   for (uint8_t i = 0; i < 3; i++) {
     const uint8_t bit = SWITCH_LATCHES[i].portaBit;
@@ -469,7 +469,7 @@ static bool expectTimerFlag(bool wantTimer, uint16_t settleMs = DEFAULT_SETTLE_M
 
   if (gotTimer != wantTimer) {
     logPush(LOG_FAIL, TAG4('T','M','R','F'), (uint8_t)wantTimer, (uint8_t)gotTimer, o.porta);
-    Serial.println(F("FAIL: 3kV timer flag mismatch"));
+    Serial.println(F("FAIL: latched 3kV timer-event flag mismatch"));
     printObserveDetailed(o);
     return false;
   }
@@ -764,7 +764,9 @@ static void testSuite3kVSpecific() {
   ackEdge();
   if (!checkComparatorLatchExact(0x00)) return;
 
-  delay(LOGIC_TIMER_3KV_MS + 10); // wait till back in interlock state
+  delay(LOGIC_TIMER_3KV_MS + 10); // wait until timer state ends
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 
   compFault(COMP_IDX_3KV_V);
   if (!checkComparatorLatchHas(bitForCompIdx(COMP_IDX_3KV_V))) return;
@@ -794,8 +796,10 @@ static void testSuite3kVSpecific() {
   if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,false,true)) return;
   delay(LOGIC_TIMER_3KV_MS + 10);
-  if (!expectTimerFlag(false)) return;
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,true,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 
   beginCase(603, F("NOM_OP: timer entry on 3kV V OR 3kV I"));
   swOn(P.sw80kv);
@@ -811,8 +815,10 @@ static void testSuite3kVSpecific() {
   if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,false,true)) return;
   delay(LOGIC_TIMER_3KV_MS + 10);
-  if (!expectTimerFlag(false)) return;
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,true,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 
   swOn(P.sw80kv);
   swOn(P.sw3kv);
@@ -826,8 +832,10 @@ static void testSuite3kVSpecific() {
   if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,false,true)) return;
   delay(LOGIC_TIMER_3KV_MS + 10);
-  if (!expectTimerFlag(false)) return;
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,true,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 }
 
 static void testSuiteNomOpEntryBlockedCases() {
@@ -1020,7 +1028,7 @@ static void printMap() {
   Serial.println(F("  D23 (PA1 bit1): A1 mirror (Beam Enable output)"));
   Serial.println(F("  D24 (PA2 bit2): A2 mirror (3kV Enable output)"));
   Serial.println(F("  D25 (PA3 bit3): Nom Op flag"));
-  Serial.println(F("  D26 (PA4 bit4): 3kV timer flag"));
+  Serial.println(F("  D26 (PA4 bit4): latched 3kV timer-event flag"));
   for (uint8_t i = 0; i < 3; i++) {
     Serial.print(F("  D")); Serial.print(SWITCH_LATCHES[i].flagPin);
     Serial.print(F(" (PA")); Serial.print(SWITCH_LATCHES[i].portaBit);

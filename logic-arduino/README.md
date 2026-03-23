@@ -129,7 +129,7 @@ s.ackLevel = (PINJ & MASK_ACK) != 0;
 
 Two 8‑bit ports are dedicated to flag outputs:
 
-### PORTA (D22–D29): live outputs + live state flags + latched switch events
+### PORTA (D22-D29): live outputs + Nom Op state + latched event flags
 `PORTA` is rebuilt and written every `step()`:
 
 | Flag Name | Flag Pin | AVR Port/Bit | Source | Latched? | Meaning |
@@ -138,11 +138,12 @@ Two 8‑bit ports are dedicated to flag outputs:
 | Beam Enable | D23 | PA1 | `out.armBeamsEnable` | No | Mirrors current Beam enable output |
 | 3kV HV Enable | D24 | PA2 | `out.enable3kV` | No | Mirrors current 3kV enable output |
 | Nom Op | D25 | PA3 | `out.nomOp` | No | 1 = in `STATE_NOM_OP` |
-| 3kV Timer State | D26 | PA4 | `out.timer3kVActive` | No | 1 = currently in `STATE_3KV_TIMER` |
+| 3kV Timer Event | D26 | PA4 | `prevFlag3kVTimer` latched from `out.timer3kVActive` | Yes | 1 = a 3kV timer interval occurred since the last ACK toggle |
 | Arm Beams Switch | D27 | PA5 | `prevFlagsSwitches` (PB5) | Yes | Switch asserted at least once since last ACK toggle |
 | CCS Power Allow Switch | D28 | PA6 | `prevFlagsSwitches` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
 | Arm 80kV Switch | D29 | PA7 | `prevFlagsSwitches` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
 
+`D26` is not a live state mirror. The internal `out.timer3kVActive` bit is only `1` while the state machine is in `STATE_3KV_TIMER`, but `write_flags()` latches that event onto `D26` until the next ACK toggle clears it.
 
 ### PORTC (D30–D37): latched comparator fault events
 `PORTC` reflects `prevFlagsComparators`, a sticky OR of `PINL` since last ACK toggle:
@@ -174,6 +175,7 @@ PORTC = prevFlagsComparators;
 `write_flags()` uses an ACK level change to clear the latched event flags:
 
 - `prevFlagsComparators` (latched comparator faults)
+- `prevFlag3kVTimer` (latched `D26` 3kV timer-event flag)
 - `prevFlagsSwitches` (latched `Arm Beams`, `CCS Power Allow`, and `Arm 80kV` switch assertions)
 
 Any edge (low→high or high→low) clears the latches:
@@ -181,13 +183,14 @@ Any edge (low→high or high→low) clears the latches:
 ```cpp
 if (sample.ackLevel != prevAck) {
   prevFlagsComparators = 0;
+  prevFlag3kVTimer     = false;
   prevFlagsSwitches    = 0;
   ackEchoState = !ackEchoState;
 }
 prevAck = sample.ackLevel;
 ```
 
-This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches sticky history**. The live `Nom Op` and `3kV Timer State` bits on `D25-D26` are not ACK-cleared.
+This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches sticky history**. `D25` (`Nom Op`) remains live; `D26-D37` are sticky history/event flags.
 
 ### ACK echo / ack-back protocol (D9 / PH6)
 
@@ -301,7 +304,7 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: follows debounced arm beams switch (`sw_arm_beams`, D11)
 - 3kV enable: follows debounced 3kV switch (`sw_3kv_enable`, D10)
 - `nomOp`: 1
-- `timer3kVActive`: 0
+- `timer3kVActive`: 0 
 
 ---
 
@@ -322,7 +325,9 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: OFF
 - 3kV enable: OFF
 - `nomOp`: 0
-- `timer3kVActive`: 1
+- `timer3kVActive`: 1 (causes `D26` to latch high)
+
+At the pin level, `D26` can remain HIGH after the state machine leaves `STATE_3KV_TIMER`; the 3kV monitor must toggle ACK to clear that latched event indication.
 
 ---
 

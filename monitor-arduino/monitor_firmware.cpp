@@ -107,7 +107,7 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define OUTPUT_3KV_ENABLE_PIN           24
 // (flags)
 #define FLAG_NOMOP_PIN                  25
-#define FLAG_3KV_TIMER_PIN              26      // Logic Arduino live 3kV timer-state flag
+#define FLAG_3KV_TIMER_PIN              26      // Logic Arduino latched 3kV timer-event flag
 #define FLAG_ARMBEAMS_PIN               27
 #define FLAG_CCSPOWER_PIN               28
 #define FLAG_ARM80KV_PIN                29
@@ -123,27 +123,27 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 /**
  * Other declarations and initializations
  */
-float               ratedHV_V;                  // "rated voltage" -- just the max output of the HVPSU
-float               ratedI_mA;                  // same for "rated current"
-float               measuredI_mA;               // calculated values
-float               measuredHV_V;               // ""
-float               programmedHV_V;             // ""
-float               iPot_V;                     // potentiometer values
-float               vPot_V;                     // ""  
-float               thresholdHV_V;              // thresholds
-float               thresholdI_mA;              // ""
-bool                resetState1kV = false;      // for Matsusada reset state logic            
-bool                ack_state = false;          // false = HI-Z, true = LOW
-bool                prevLogicAckEcho = false;   // D9 state sampled on previous 150 ms cycle
-char                buffer[21];                 // store formatted string to print to LCD
-char                programmedHV_buf[10];       // store current/voltage values for printing
-char                measuredHV_buf[10];         // ""    
-char                thresholdHV_buf[10];        // ""
-char                measuredI_buf[10];          // ""
-char                thresholdI_buf[10];         // ""
-bool                prevNomOpState = false;     // previous D25 state, used to clear the 3kV timer-event count on Nom Op entry
-bool                prev3kVTimerState = false;  // previous D26 state, used to detect timer-state rising edges
-int                 resetState3kV = 0;          // count of 3kV timer-state entries since the last Nom Op entry
+float               ratedHV_V;                      // "rated voltage" -- just the max output of the HVPSU
+float               ratedI_mA;                      // same for "rated current"
+float               measuredI_mA;                   // calculated values
+float               measuredHV_V;                   // ""
+float               programmedHV_V;                 // ""
+float               iPot_V;                         // potentiometer values
+float               vPot_V;                         // ""  
+float               thresholdHV_V;                  // thresholds
+float               thresholdI_mA;                  // ""
+bool                resetState1kV = false;          // for Matsusada reset state logic            
+bool                ack_state = false;              // false = HI-Z, true = LOW
+bool                prevLogicAckEcho = false;       // D9 state sampled on previous 150 ms cycle
+char                buffer[21];                     // store formatted string to print to LCD
+char                programmedHV_buf[10];           // store current/voltage values for printing
+char                measuredHV_buf[10];             // ""    
+char                thresholdHV_buf[10];            // ""
+char                measuredI_buf[10];              // ""
+char                thresholdI_buf[10];             // ""
+bool                prevNomOpState = false;         // previous D25 state, used to clear the 3kV timer-event count on Nom Op entry
+bool                prev3kVTimerLatchState = false; // previous sampled D26 latch state, used to detect new timer events
+int                 resetState3kV = 0;              // count of latched 3kV timer events since the last Nom Op entry
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
@@ -216,21 +216,21 @@ void checkMatsusadaResetState() {
 /**
  * Helper to maintain the +3kV timer/reset-event counter.
  *
- * The +3kV monitor counts timer-state entries on rising edges of that flag and clears 
+ * The +3kV monitor counts new timer events on rising edges of that latched flag and clears 
  * the count whenever Nom Op rises, which indicates the system has re-entered normal operation.
  */
-void update3KVResetCounter(bool nomop, bool timerState) {
+void update3KVResetCounter(bool nomop, bool timerEventLatched) {
     if (!prevNomOpState && nomop) {
         // Clear the accumulated timer-event count when Nom Op is re-entered.
         resetState3kV = 0;
-    } else if (!prev3kVTimerState && timerState) {
-        // Count each timer event once, on the D26 rising edge only.
+    } else if (!prev3kVTimerLatchState && timerEventLatched) {
+        // Count each timer event once, on the D26 latch rising edge only.
         resetState3kV++;
     }
 
     modbus_regs[IREG_3KV_RESET_COUNT_ADDR] = resetState3kV;
     prevNomOpState = nomop;
-    prev3kVTimerState = timerState;
+    prev3kVTimerLatchState = timerEventLatched;
 }
 
 /**
@@ -292,9 +292,9 @@ bool read_value()
     /**
      *  3kV Bertan specific: 
      * 
-     *      read live state flags, latched flags, logic arduino outputs, and switch states.
+     *      read the live Nom Op flag, latched logic event flags, logic arduino outputs, and switch states.
      *
-     *      update the 3kV timer/reset-event counter from the live D26 timer flag.
+     *      update the 3kV timer/reset-event counter from the latched D26 timer flag.
      */
     if (ps_id == 4) { // only for +3kV Bertan
 
@@ -306,12 +306,12 @@ bool read_value()
         modbus_regs[DINPUT_CCSPOWER_ADDR] = digitalRead(OUTPUT_CCSPOWER_PIN) ;
         modbus_regs[DINPUT_3KV_ENABLE_ADDR] = digitalRead(OUTPUT_3KV_ENABLE_PIN);
 
-        // live logic state flags
+        // D25 is live; D26 is a latched timer-event flag.
         bool nomop = digitalRead(FLAG_NOMOP_PIN);
-        bool timerState = digitalRead(FLAG_3KV_TIMER_PIN);
+        bool timerEventLatched = digitalRead(FLAG_3KV_TIMER_PIN);
 
         // Update the 3kV timer/reset-event counter from D26.
-        update3KVResetCounter(nomop, timerState);
+        update3KVResetCounter(nomop, timerEventLatched);
 
         modbus_regs[DINPUT_NOMOP_FLAG_ADDR] = nomop;
 
@@ -545,7 +545,7 @@ void setup()
             pinMode(LOGIC_ACK_ECHO_PIN, INPUT_PULLUP);
             prevLogicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN); // initialize D9 edge detection
             prevNomOpState = digitalRead(FLAG_NOMOP_PIN);
-            prev3kVTimerState = digitalRead(FLAG_3KV_TIMER_PIN);
+            prev3kVTimerLatchState = digitalRead(FLAG_3KV_TIMER_PIN);
             // switches only monitored by +3kV
             pinMode(ARM_BEAMS_SWITCH_PIN, INPUT_PULLUP);
             pinMode(CCS_POWER_ALLOW_SWITCH_PIN, INPUT_PULLUP);

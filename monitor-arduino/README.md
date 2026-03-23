@@ -46,7 +46,7 @@ The `+3 kV` monitor has extra firmware responsibilities. In addition to monitori
 | `D23` | Logic Arduino `Arm Beams` output state |
 | `D24` | Logic Arduino `3 kV Enable` output state |
 | `D25` | Logic Arduino `Nom Op` flag |
-| `D26` | Logic Arduino live `3 kV Timer` flag |
+| `D26` | Logic Arduino latched `3 kV Timer Event` flag |
 | `D27-D29` | Logic Arduino latched switch-history flags |
 | `D30-D37` | Logic Arduino latched comparator-history flags |
 
@@ -235,8 +235,6 @@ The current firmware exposes one contiguous register array:
 | `22` | `DINPUT_3K_ICOMP_FLAG_ADDR` | `+3 kV` overcurrent flag |
 | `23` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
 
-The current Modbus map does not dedicate a separate register to the live `D26` timer-state bit, and it no longer includes a separate `3 kV Enable` switch-flag register. The `+3 kV` monitor consumes `D26` internally to maintain register `4`, while the raw `3 kV Enable` switch request remains available through the common HV-enable register at address `5`.
-
 ---
 
 ## Supply-Specific Firmware Behavior
@@ -274,8 +272,8 @@ For `DINPUT_HVENABLE_ADDR`, the current code treats the `+20 kV` HV enable telem
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
 - Reads Logic Arduino output-state lines on `D22-D24`
-- Reads live logic-state flags on `D25-D26`
-- Reads latched logic-history flags on `D27-D37`
+- Reads the live `Nom Op` flag on `D25`
+- Reads latched logic-history flags on `D26-D37`
 - Reads raw Arm 80 kV switch state on `D8`
 - Reads the raw `3 kV Enable` switch request on `D7`
 - Reads Logic Arduino ack-back on `D9`
@@ -289,7 +287,7 @@ It also tracks a `3 kV` timer/reset-event counter in Modbus register `4`.
 
 Current implementation detail: the counter increments when:
 
-- The live `D26` timer-state flag rises
+- The latched `D26` timer-event flag rises
 
 It resets to `0` when `Nom Op` rises.
 

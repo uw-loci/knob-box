@@ -225,16 +225,16 @@ The Logic Arduino exports two kinds of information to the `+3 kV` monitor:
 
 - `D22-D24`: mirrors of the current output states for `CCS`, `Arm Beams`, and `3 kV Enable`
 - `D25`: `Nom Op` flag
-- `D26`: `3 kV Timer` flag
 
 #### Latched event / fault flags
 
+- `D26`: latched `3 kV Timer` event flag
 - `D27-D29`: latched switch-related flags
 - `D30-D37`: latched comparator fault flags
 
-In the current implementation, the latched flags on `D27-D37` persist until the `+3 kV` monitor acknowledges that it has read them. The `D25-D26` state bits are live and are not ACK-cleared.
+In the current implementation, the latched flags on `D26-D37` persist until the `+3 kV` monitor acknowledges that it has read them. `D25` remains live.
 
-The current `+3 kV` monitor firmware uses the live `D26` timer flag internally to maintain its `3 kV` timer/reset-event counter. The raw `3 kV Enable` switch request from monitor `D7` is available through the monitor firmware's common HV-enable Modbus register rather than through a dedicated extra flag register.
+The current `+3 kV` monitor firmware uses the latched `D26` timer-event flag internally to maintain its `3 kV` timer/reset-event counter.
 
 ### Raw switch intent lines also seen by the `+3 kV` monitor
 

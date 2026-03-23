@@ -41,7 +41,7 @@
     - PORTA (D22-D29):
         * D22-24: reflect state of outputs A0-A2 respectively
         * D25 NomOp flag: HIGH = In NOM OP  ->  LOW = not NOM OP
-        * D26 3kV timer flag: HIGH = currently in STATE_3KV_TIMER
+        * D26 latched 3kV timer flag: HIGH = timer state occurred since last ACK toggle
         * D27-29 latched debounced switches (D11-13 asserted=1) since last ACK toggle
     - ACK toggle input (D14): any change clears latched interlock faults
     - ACK echo output (D9): toggles on every observed ACK edge so the monitor Arduino can
@@ -242,6 +242,7 @@ static inline void write_flags(const Sample& sample, const Output& out)
 {
   // Latched event flags since last ACK toggle
   static uint8_t prevFlagsComparators = 0;  // PL0-PL7 comparator bits (1 = fault)
+  static bool    prevFlag3kVTimer     = false; // D26 timer-event latch
   static uint8_t prevFlagsSwitches    = 0;  // PB5-PB7 asserted bits (1 = asserted)
 
   // Track ACK level to detect toggle
@@ -250,6 +251,7 @@ static inline void write_flags(const Sample& sample, const Output& out)
   // Clear flags on ACK toggle
   if (sample.ackLevel != prevAck) {
     prevFlagsComparators = 0;
+    prevFlag3kVTimer     = false;
     prevFlagsSwitches    = 0;
     ackEchoState = !ackEchoState;   // Flip ack Echo State, written in write_outputs with portH
   }
@@ -258,19 +260,22 @@ static inline void write_flags(const Sample& sample, const Output& out)
 
   // Latch new interlock events
   prevFlagsComparators |= sample.comparators;
+  if (out.timer3kVActive) {
+    prevFlag3kVTimer = true;
+  }
   prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCH_FLAGS_PORTB);
 
   // Build PORTA (D22-D29)
   // PA0-PA2 (D22-D24): reflect outputs A0, A1, A2
   // PA3     (D25): NomOp flag
-  // PA4     (D26): 3kV timer-state flag
+  // PA4     (D26): latched 3kV timer-event flag
   // PA5-PA7 (D27-D29): latched switch flags
   uint8_t porta = 0x00;
   porta |= out.ccsPowerEnable ? MASK_PA_CCS   : 0;
   porta |= out.armBeamsEnable ? MASK_PA_BEAMS : 0;
   porta |= out.enable3kV      ? MASK_PA_3KVEN : 0;
   porta |= out.nomOp          ? MASK_PA_NOMOP : 0;
-  porta |= out.timer3kVActive ? MASK_PA_3KVTMR : 0;
+  porta |= prevFlag3kVTimer   ? MASK_PA_3KVTMR : 0;
   porta |= (uint8_t)(prevFlagsSwitches & MASK_SWITCH_FLAGS_PORTB);
 
   // write flags
