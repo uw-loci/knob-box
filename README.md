@@ -236,22 +236,6 @@ In the current implementation, the latched flags on `D26-D37` persist until the 
 
 The current `+3 kV` monitor firmware uses the latched `D26` timer-event flag internally to maintain its `3 kV` timer/reset-event counter.
 
-### Raw switch intent lines also seen by the `+3 kV` monitor
-
-The `+3 kV` monitor directly reads:
-
-- `Arm 80 kV`
-- `3 kV Enable`
-- `Arm Beams`
-- `CCS Power`
-
-In the revised wiring, the raw `3 kV Enable` request is read on monitor `D7` through a direct physical connection rather than through Logic Arduino `D26`.
-
-This is important because it lets the Dashboard distinguish:
-
-- what the user requested at the panel
-- from what the Logic Arduino is actually allowing at the outputs
-
 ### ACK / ACK-back handshake
 
 The two boards use a simple handshake so the monitor can both clear latched flags and confirm that the Logic Arduino is still alive.
