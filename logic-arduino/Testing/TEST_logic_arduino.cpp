@@ -836,6 +836,37 @@ static void testSuite3kVSpecific() {
   if (!expectOutputs(false,false,true,true)) return;
   ackEdge();
   if (!expectTimerFlag(false)) return;
+
+  suiteStart();
+
+  beginCase(604, F("ACK during active 3kV timer clears D26 until the next timer-state entry"));
+  swOn(P.sw3kv);
+  if (!expectNomOp(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+  if (!expectTimerFlag(false)) return;
+
+  compFault(COMP_IDX_3KV_I);
+  delay(2);
+  compSafe(COMP_IDX_3KV_I);
+  if (!expectNomOp(false)) return;
+  if (!expectTimerFlag(true)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+
+  delay(LOGIC_TIMER_3KV_MS + 10);
+  if (!expectTimerFlag(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+
+  compFault(COMP_IDX_3KV_I);
+  delay(2);
+  compSafe(COMP_IDX_3KV_I);
+  if (!expectTimerFlag(true)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 }
 
 static void testSuiteNomOpEntryBlockedCases() {
