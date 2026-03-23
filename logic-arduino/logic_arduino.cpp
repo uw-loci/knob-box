@@ -41,7 +41,8 @@
     - PORTA (D22-D29):
         * D22-24: reflect state of outputs A0-A2 respectively
         * D25 NomOp flag: HIGH = In NOM OP  ->  LOW = not NOM OP
-        * D26-29 lached debounced switches (D10-13 asserted=1) since last ACK toggle
+        * D26 3kV timer flag: HIGH = currently in STATE_3KV_TIMER
+        * D27-29 latched debounced switches (D11-13 asserted=1) since last ACK toggle
     - ACK toggle input (D14): any change clears latched interlock faults
     - ACK echo output (D9): toggles on every observed ACK edge so the monitor Arduino can
       prove this firmware is alive and still sampling D14
@@ -89,6 +90,8 @@ static constexpr uint8_t MASK_PA_CCS    = _BV(PA0);
 static constexpr uint8_t MASK_PA_BEAMS  = _BV(PA1);
 static constexpr uint8_t MASK_PA_3KVEN  = _BV(PA2);
 static constexpr uint8_t MASK_PA_NOMOP  = _BV(PA3);
+static constexpr uint8_t MASK_PA_3KVTMR = _BV(PA4);
+static constexpr uint8_t MASK_SWITCH_FLAGS_PORTB = _BV(PB5) | _BV(PB6) | _BV(PB7);
 
 
 // Outputs
@@ -221,6 +224,7 @@ struct Output {
   bool armBeamsEnable;
   bool enable3kV;
   bool nomOp;
+  bool timer3kVActive;
 };
 
 static inline void sample_inputs(Sample &s) {
@@ -238,7 +242,7 @@ static inline void write_flags(const Sample& sample, const Output& out)
 {
   // Latched event flags since last ACK toggle
   static uint8_t prevFlagsComparators = 0;  // PL0-PL7 comparator bits (1 = fault)
-  static uint8_t prevFlagsSwitches    = 0;  // PB4-PB7 asserted bits (1 = asserted)
+  static uint8_t prevFlagsSwitches    = 0;  // PB5-PB7 asserted bits (1 = asserted)
 
   // Track ACK level to detect toggle
   static bool prevAck = false;
@@ -254,18 +258,20 @@ static inline void write_flags(const Sample& sample, const Output& out)
 
   // Latch new interlock events
   prevFlagsComparators |= sample.comparators;
-  prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCHES_PORTB);
+  prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCH_FLAGS_PORTB);
 
   // Build PORTA (D22-D29)
   // PA0-PA2 (D22-D24): reflect outputs A0, A1, A2
   // PA3     (D25): NomOp flag
-  // PA4-PA7 (D26-D29): latched switch flags
+  // PA4     (D26): 3kV timer-state flag
+  // PA5-PA7 (D27-D29): latched switch flags
   uint8_t porta = 0x00;
   porta |= out.ccsPowerEnable ? MASK_PA_CCS   : 0;
   porta |= out.armBeamsEnable ? MASK_PA_BEAMS : 0;
   porta |= out.enable3kV      ? MASK_PA_3KVEN : 0;
   porta |= out.nomOp          ? MASK_PA_NOMOP : 0;
-  porta |= (uint8_t)(prevFlagsSwitches & MASK_SWITCHES_PORTB);
+  porta |= out.timer3kVActive ? MASK_PA_3KVTMR : 0;
+  porta |= (uint8_t)(prevFlagsSwitches & MASK_SWITCH_FLAGS_PORTB);
 
   // write flags
   PORTA = porta;
@@ -330,7 +336,7 @@ static inline void step() {
   const bool sw_arm_80kv   = (inputSnapshot.switchesAssertPortB & _BV(PB7)) != 0; // D13
 
   // Outputs, all off by default
-  Output outputSnapshot = {false, false, false, false};
+  Output outputSnapshot = {false, false, false, false, false};
 
   // ---- State machine ----
   switch (currentState) {
@@ -387,6 +393,7 @@ static inline void step() {
       outputSnapshot.armBeamsEnable  = false;
       outputSnapshot.enable3kV       = sw_3kv_enable;
       outputSnapshot.nomOp           = false;
+      outputSnapshot.timer3kVActive  = false;
       break;
 
     case State::STATE_NOM_OP:
@@ -394,6 +401,7 @@ static inline void step() {
       outputSnapshot.armBeamsEnable  = sw_arm_beams;
       outputSnapshot.enable3kV       = sw_3kv_enable;
       outputSnapshot.nomOp           = true;
+      outputSnapshot.timer3kVActive  = false;
       break;
 
     case State::STATE_3KV_TIMER:
@@ -401,6 +409,7 @@ static inline void step() {
       outputSnapshot.armBeamsEnable  = false;
       outputSnapshot.enable3kV       = false;
       outputSnapshot.nomOp           = false;
+      outputSnapshot.timer3kVActive  = true;
       break;
   }
 
@@ -434,7 +443,7 @@ void setup() {
   // Produce a initial flag image and set outputs
   Sample raw;
   sample_inputs(raw);
-  Output out = {false, false, false, false};
+  Output out = {false, false, false, false, false};
   write_flags(raw, out);
 
   // Ensure outputs are in safe posture

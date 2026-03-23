@@ -7,7 +7,7 @@ This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of 
   - **CCS Enable** (A0 / PF0)
   - **Beam Enable** (A1 / PF1)
   - **3kV Enable** (A2 / PF2)
-- Publishes **status + event flags** on two 8‑bit ports for the 3kV Monitoring Arduino to read.
+- Publishes **live status + latched event flags** on two 8-bit ports for the 3kV Monitoring Arduino to read.
 - Uses an **ACK toggle input** on **D14 / PJ1** to clear latched event flags after the 3kV Monitoring Arduino reads flags.
 - Drives an **ACK echo / ack-back output** on **D9 / PH6** that toggles on every observed ACK edge so the monitor Arduino can verify that the Logic Arduino is alive.
 
@@ -129,7 +129,7 @@ s.ackLevel = (PINJ & MASK_ACK) != 0;
 
 Two 8‑bit ports are dedicated to flag outputs:
 
-### PORTA (D22–D29): live outputs + NomOp + latched switch events
+### PORTA (D22–D29): live outputs + live state flags + latched switch events
 `PORTA` is rebuilt and written every `step()`:
 
 | Flag Name | Flag Pin | AVR Port/Bit | Source | Latched? | Meaning |
@@ -138,10 +138,11 @@ Two 8‑bit ports are dedicated to flag outputs:
 | Beam Enable | D23 | PA1 | `out.armBeamsEnable` | No | Mirrors current Beam enable output |
 | 3kV HV Enable | D24 | PA2 | `out.enable3kV` | No | Mirrors current 3kV enable output |
 | Nom Op | D25 | PA3 | `out.nomOp` | No | 1 = in `STATE_NOM_OP` |
-| 3kV HV Output Enable Switch | D26 | PA4 | `prevFlagsSwitches` (PB4) | Yes | Switch asserted at least once since last ACK toggle |
+| 3kV Timer State | D26 | PA4 | `out.timer3kVActive` | No | 1 = currently in `STATE_3KV_TIMER` |
 | Arm Beams Switch | D27 | PA5 | `prevFlagsSwitches` (PB5) | Yes | Switch asserted at least once since last ACK toggle |
 | CCS Power Allow Switch | D28 | PA6 | `prevFlagsSwitches` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
 | Arm 80kV Switch | D29 | PA7 | `prevFlagsSwitches` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
+
 
 ### PORTC (D30–D37): latched comparator fault events
 `PORTC` reflects `prevFlagsComparators`, a sticky OR of `PINL` since last ACK toggle:
@@ -173,7 +174,7 @@ PORTC = prevFlagsComparators;
 `write_flags()` uses an ACK level change to clear the latched event flags:
 
 - `prevFlagsComparators` (latched comparator faults)
-- `prevFlagsSwitches` (latched switch assertions)
+- `prevFlagsSwitches` (latched `Arm Beams`, `CCS Power Allow`, and `Arm 80kV` switch assertions)
 
 Any edge (low→high or high→low) clears the latches:
 
@@ -186,7 +187,7 @@ if (sample.ackLevel != prevAck) {
 prevAck = sample.ackLevel;
 ```
 
-This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches flags**.
+This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches sticky history**. The live `Nom Op` and `3kV Timer State` bits on `D25-D26` are not ACK-cleared.
 
 ### ACK echo / ack-back protocol (D9 / PH6)
 
@@ -282,6 +283,7 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: OFF
 - 3kV enable: follows **debounced** 3kV switch (`sw_3kv_enable`)
 - `nomOp`: 0
+- `timer3kVActive`: 0
 
 ---
 
@@ -299,6 +301,7 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: follows debounced arm beams switch (`sw_arm_beams`, D11)
 - 3kV enable: follows debounced 3kV switch (`sw_3kv_enable`, D10)
 - `nomOp`: 1
+- `timer3kVActive`: 0
 
 ---
 
@@ -319,6 +322,7 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: OFF
 - 3kV enable: OFF
 - `nomOp`: 0
+- `timer3kVActive`: 1
 
 ---
 
