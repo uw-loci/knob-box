@@ -258,13 +258,6 @@ When the Logic Arduino sees the ACK edge:
 
 The `+3 kV` monitor samples `D9` on its periodic cycle. If `D9` changed since the previous sample, it sets the `logic alive` status in the Modbus map.
 
-### Why this matters
-
-This interface gives the Dashboard three classes of logic-related information:
-
-- Real-time logic output state
-- Latched recent interlock history
-- A proof-of-life indication that the Logic Arduino is still executing
 
 ## 8. Software Meaning of the Front Panel
 
@@ -290,8 +283,6 @@ The code and operating manual both make a key distinction:
 - Actual `3 kV` enable
 
 This means the user can place `Arm Beams` or `CCS Power` switches in the `ON` position while the system still behaves as OFF because the Logic Arduino is holding the safe state.
-
-That distinction is one of the main reasons the `+3 kV` monitor forwards both raw switch state and logic output state to the Dashboard.
 
 ## 9. Interaction With External Systems
 
