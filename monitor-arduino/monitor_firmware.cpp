@@ -137,6 +137,7 @@ float               thresholdHV_V;                  // thresholds
 float               thresholdI_mA;                  // ""           
 bool                ack_state = false;              // false = HI-Z, true = LOW
 bool                prevLogicAckEcho = false;       // D9 state sampled on previous 150 ms cycle
+bool                resetState1kV = false;          // for Matsusadas, true if predicted to be currently in the reset state after an overcurrent event
 char                buffer[21];                     // store formatted string to print to LCD
 char                programmedHV_buf[10];           // store current/voltage values for printing
 char                measuredHV_buf[10];             // ""    
