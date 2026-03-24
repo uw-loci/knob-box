@@ -232,7 +232,7 @@ The Logic Arduino exports two kinds of information to the `+3 kV` monitor:
 - `D27-D29`: latched switch-related flags
 - `D30-D37`: latched comparator fault flags
 
-In the current implementation, the latched flags on `D26-D37` persist until the `+3 kV` monitor acknowledges that it has read them. `D25` remains live.
+In the current implementation, the Logic Arduino latches on `D26-D37` persist until the next `+3 kV` monitor ACK edge. The monitor samples those pins every `150 ms`, accumulates them into its own sticky Modbus latched-flags register, and clears that Modbus-visible copy only after a successful dashboard poll reply. `D25` remains live.
 
 The current `+3 kV` monitor firmware uses the latched `D26` timer-event flag internally to maintain its `3 kV` timer/reset-event counter.
 
@@ -242,7 +242,7 @@ The two boards use a simple handshake so the monitor can both clear latched flag
 
 #### `D14`: ACK from monitor to logic
 
-The `+3 kV` monitor toggles the acknowledge line after it reads the Logic Arduino status.
+The `+3 kV` monitor toggles the acknowledge line on its periodic sampling cycle after it reads the Logic Arduino status.
 
 Current implementation detail:
 

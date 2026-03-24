@@ -130,13 +130,19 @@ void loop()
 {
   wdt_reset(); // Feed dog
 
-  slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+  int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+
+  if (ps_id == 4 && pollResult > 4) {
+    latchedFlags = 0;
+    modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = 0;
+  }
 
   timer.tick();
 }
 ```
 
 Key point: the current firmware does not have a separate `transmit_data()` task. Dashboard communication happens when the Modbus slave is polled.
+For the `+3 kV` variant, a successful Modbus reply also clears the monitor-side sticky copy of the Logic Arduino fault flags after that response has been sent.
 
 ---
 
@@ -211,7 +217,7 @@ The current firmware exposes one contiguous register array:
 | Address | Name | Meaning |
 |---------|------|---------|
 | `5` | `DINPUT_UNLATCHED_SIGNALS_ADDR` | Packed unlatched signals word |
-| `6` | `DINPUT_LATCHED_FLAGS_ADDR` | Packed latched flags word |
+| `6` | `DINPUT_LATCHED_FLAGS_ADDR` | Packed monitor-latched flags word |
 
 `DINPUT_UNLATCHED_SIGNALS_ADDR` bit layout:
 
@@ -244,6 +250,8 @@ The current firmware exposes one contiguous register array:
 | `15` | `D37` | `3 kV` I Comparator |
 
 Bits `0-3` are currently unused and remain `0`.
+
+For `ps_id = 4`, the monitor samples the raw Logic Arduino latch pins on each `read_value()` cycle, ORs those bits into its own sticky `latchedFlags` word, and publishes that word in register `6`. After the dashboard request is answered successfully, the monitor clears that sticky word so the next request reports only newly sampled events.
 
 Per-supply use of the packed DINPUT registers:
 
@@ -287,11 +295,12 @@ For `DINPUT_UNLATCHED_SIGNALS_ADDR` bit `0`, the current code treats the `+20 kV
 
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
-- Uses `DINPUT_UNLATCHED_SIGNALS_ADDR` for the shared HV-enable input on `D7`, the raw Arm 80 kV switch on `D8`, the live Logic Arduino signals on `D22-D25`, and the logic-alive edge detect derived from `D9`
-- Uses `DINPUT_LATCHED_FLAGS_ADDR` for the latched Logic Arduino flags on `D26-D37`, keeping `D26 -> bit 4` through `D37 -> bit 15`
+- Uses `DINPUT_UNLATCHED_SIGNALS_ADDR` for the shared HV-enable input on `D7`, the raw Arm 80 kV switch on `D8`, the live Logic Arduino output signals on `D22-D25`, and the logic-alive heartbeat edge detect derived from `D9`
+- Uses `DINPUT_LATCHED_FLAGS_ADDR` for a monitor-latched copy of the Logic Arduino flags on `D26-D37`, keeping `D26 -> bit 4` through `D37 -> bit 15`
 - Keeps `D25` (`Nom Op`) in the unlatched word and `D26-D37` in the latched word
 - Maps the existing ack-back edge-detect behavior on `D9` to unlatched-signals bit `7`
 - Toggles the flags acknowledge line on `D14`
+- Clears the monitor-latched flags only after a successful Modbus reply to the dashboard
 
 The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs on `D11` and `D12`, but the published Modbus map currently exposes the Logic Arduino output-state lines on `D22` and `D23` for those functions.
 
@@ -304,6 +313,7 @@ Current implementation detail: the counter increments when:
 - The latched `D26` timer-event flag rises
 
 It resets to `0` when `Nom Op` rises.
+The counter continues to use the raw sampled `D26` latch input rather than the monitor-latched Modbus register.
 
 ---
 

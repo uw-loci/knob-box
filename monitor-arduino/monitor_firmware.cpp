@@ -146,6 +146,7 @@ char                thresholdI_buf[10];             // ""
 bool                prevNomOpState = false;         // previous D25 state, used to clear the 3kV timer-event count on Nom Op entry
 bool                prev3kVTimerLatchState = false; // previous sampled D26 latch state, used to detect new timer events
 int                 resetState3kV = 0;              // count of latched 3kV timer events since the last Nom Op entry
+uint16_t            latchedFlags = 0;               // sticky Modbus copy of D26-D37 until the next successful reply
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
@@ -190,7 +191,7 @@ static inline bool readHVEnableSwitchSignal()
     return digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
 }
 
-static inline uint16_t readLatchedFlagsWord()
+static inline uint16_t readFlagsWord()
 {
     uint16_t flags = 0;
 
@@ -353,8 +354,9 @@ bool read_value()
      */
     if (ps_id == 4) { // only for +3kV Bertan
 
-        uint16_t flags = readLatchedFlagsWord();
-        modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = flags;
+        uint16_t flags = readFlagsWord();
+        latchedFlags |= flags;
+        modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = latchedFlags;
 
         uint16_t unlatchedSignals = readUnlatchedSignalsWord();
         modbus_regs[DINPUT_UNLATCHED_SIGNALS_ADDR] = unlatchedSignals;
@@ -363,7 +365,7 @@ bool read_value()
         bool nomop = (unlatchedSignals & UNLATCHED_SIGNAL_MASK_NOMOP) != 0;
         bool timerEventLatched = (flags & LATCHED_FLAG_MASK_3KV_TIMER) != 0;
 
-        // Update the 3kV timer/reset-event counter from D26.
+        // Update the 3kV timer/reset-event counter from the raw D26 latch input.
         update3KVResetCounter(nomop, timerEventLatched);
 
         // ack flag read so logic arduino can reset and continue
@@ -607,7 +609,14 @@ void loop()
 {
   wdt_reset(); //Feed dog
 
-  slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+  int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+
+  // The dashboard currently reads the full 0-6 block in one request.
+  // Clear the monitor-side sticky flag copy only after that reply has been sent.
+  if (ps_id == 4 && pollResult > 4) {
+    latchedFlags = 0;
+    modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = 0;
+  }
 
   timer.tick();
 }
