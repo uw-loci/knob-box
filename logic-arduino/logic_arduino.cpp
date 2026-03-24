@@ -41,7 +41,8 @@
     - PORTA (D22-D29):
         * D22-24: reflect state of outputs A0-A2 respectively
         * D25 NomOp flag: HIGH = In NOM OP  ->  LOW = not NOM OP
-        * D26-29 lached debounced switches (D10-13 asserted=1) since last ACK toggle
+        * D26 latched 3kV timer flag: HIGH = timer state occurred since last ACK toggle
+        * D27-29 latched debounced switches (D11-13 asserted=1) since last ACK toggle
     - ACK toggle input (D14): any change clears latched interlock faults
     - ACK echo output (D9): toggles on every observed ACK edge so the monitor Arduino can
       prove this firmware is alive and still sampling D14
@@ -89,6 +90,8 @@ static constexpr uint8_t MASK_PA_CCS    = _BV(PA0);
 static constexpr uint8_t MASK_PA_BEAMS  = _BV(PA1);
 static constexpr uint8_t MASK_PA_3KVEN  = _BV(PA2);
 static constexpr uint8_t MASK_PA_NOMOP  = _BV(PA3);
+static constexpr uint8_t MASK_PA_3KVTMR = _BV(PA4);
+static constexpr uint8_t MASK_SWITCH_FLAGS_PORTB = _BV(PB5) | _BV(PB6) | _BV(PB7);
 
 
 // Outputs
@@ -138,6 +141,10 @@ static uint32_t resetButtonHist = 0;
 static bool    resetButtonStable = false;
 static bool    prevResetButtonDb = false;
 static bool    ackEchoState = false;
+static uint8_t latchedComparatorFlags = 0;
+static uint8_t latchedSwitchFlags = 0;
+static bool    latched3kVTimerFlag = false;
+static bool    prevAckLevel = false;
 
 // ========================= Helpers =========================
 
@@ -234,42 +241,46 @@ static inline void sample_inputs(Sample &s) {
   s.resetAsserted       = (pinJ & MASK_RESET_BTN) == 0;
 }
 
-static inline void write_flags(const Sample& sample, const Output& out)
-{
-  // Latched event flags since last ACK toggle
-  static uint8_t prevFlagsComparators = 0;  // PL0-PL7 comparator bits (1 = fault)
-  static uint8_t prevFlagsSwitches    = 0;  // PB4-PB7 asserted bits (1 = asserted)
-
-  // Track ACK level to detect toggle
-  static bool prevAck = false;
-
-  // Clear flags on ACK toggle
-  if (sample.ackLevel != prevAck) {
-    prevFlagsComparators = 0;
-    prevFlagsSwitches    = 0;
+static inline void handle_ack_toggle(bool ackLevel) {
+  if (ackLevel != prevAckLevel) {
+    latchedComparatorFlags = 0;
+    latchedSwitchFlags = 0;
+    latched3kVTimerFlag = false;
     ackEchoState = !ackEchoState;   // Flip ack Echo State, written in write_outputs with portH
   }
 
-  prevAck = sample.ackLevel;
+  prevAckLevel = ackLevel;
+}
 
+static inline void enter_3kv_timer_state(uint32_t& timerEnterMs) {
+  currentState = State::STATE_3KV_TIMER;
+  timerEnterMs = millis();
+  // D26 is an event latch, so only set it on timer-state entry.
+  latched3kVTimerFlag = true;
+}
+
+static inline void write_flags(const Sample& sample, const Output& out)
+{
   // Latch new interlock events
-  prevFlagsComparators |= sample.comparators;
-  prevFlagsSwitches |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCHES_PORTB);
+  latchedComparatorFlags |= sample.comparators;
+  latchedSwitchFlags |= (uint8_t)(sample.switchesAssertPortB & MASK_SWITCH_FLAGS_PORTB);
 
   // Build PORTA (D22-D29)
   // PA0-PA2 (D22-D24): reflect outputs A0, A1, A2
   // PA3     (D25): NomOp flag
-  // PA4-PA7 (D26-D29): latched switch flags
+  // PA4     (D26): latched 3kV timer-event flag
+  // PA5-PA7 (D27-D29): latched switch flags
   uint8_t porta = 0x00;
   porta |= out.ccsPowerEnable ? MASK_PA_CCS   : 0;
   porta |= out.armBeamsEnable ? MASK_PA_BEAMS : 0;
   porta |= out.enable3kV      ? MASK_PA_3KVEN : 0;
   porta |= out.nomOp          ? MASK_PA_NOMOP : 0;
-  porta |= (uint8_t)(prevFlagsSwitches & MASK_SWITCHES_PORTB);
+  porta |= latched3kVTimerFlag ? MASK_PA_3KVTMR : 0;
+  porta |= (uint8_t)(latchedSwitchFlags & MASK_SWITCH_FLAGS_PORTB);
 
   // write flags
   PORTA = porta;
-  PORTC = prevFlagsComparators;
+  PORTC = latchedComparatorFlags;
 }
 
 
@@ -314,6 +325,7 @@ static inline void step() {
   // Sample all inputs
   Sample inputSnapshot;
   sample_inputs(inputSnapshot);
+  handle_ack_toggle(inputSnapshot.ackLevel);
 
   // Debounce swithces and buttons inputs
   inputSnapshot.switchesAssertPortB = debounce_switches(inputSnapshot.switchesAssertPortB);
@@ -339,8 +351,7 @@ static inline void step() {
       // If timer is enabled, check for 3kv overcurrent right away 
       if (timer_3kv_state_enabled()) {
         if (inputSnapshot.comparators & MASK_COMP_3KV_I) {
-          currentState = State::STATE_3KV_TIMER;
-          timerEnterMs = millis();
+          enter_3kv_timer_state(timerEnterMs);
           break;
         }
       }
@@ -357,8 +368,7 @@ static inline void step() {
       if (timer_3kv_state_enabled()) {
         // Check for 3kv comparator trips right away
         if (inputSnapshot.comparators & MASK_COMP_3KV) {
-          currentState = State::STATE_3KV_TIMER;
-          timerEnterMs = millis();
+          enter_3kv_timer_state(timerEnterMs);
           break;
         }
       }
@@ -407,8 +417,8 @@ static inline void step() {
   // ---- Flags  ----
   write_flags(inputSnapshot, outputSnapshot);
 
-  // write_flags() must come before write outputs since the ack-back is decided within write_flags...
-  // ...but actually written with the other portH outputs in write_outputs()
+  // Flags are updated before outputs so the current-step ACK handling and latch state
+  // are reflected together when write_outputs() drives the ack-back bit on PORTH.
 
   // ---- Drive outputs ----
   write_outputs(outputSnapshot);
@@ -430,10 +440,15 @@ void setup() {
   resetButtonHist = 0;
   prevResetButtonDb = false;
   ackEchoState = false;
+  latchedComparatorFlags = 0;
+  latchedSwitchFlags = 0;
+  latched3kVTimerFlag = false;
+  prevAckLevel = false;
 
   // Produce a initial flag image and set outputs
   Sample raw;
   sample_inputs(raw);
+  handle_ack_toggle(raw.ackLevel);
   Output out = {false, false, false, false};
   write_flags(raw, out);
 

@@ -19,8 +19,10 @@
   - Type "help" for commands.
 
   INPUT/OUTPUT MAP (matches your Logic Arduino final design)
-  Switches (Logic input, asserted=LOW) latch to PORTA upper nibble:
-    3kV HV Output Enable Switch  D10 -> Flag D26 (PA4)
+  Latched timer-event flag on PORTA:
+    3kV Timer Event              N/A -> Flag D26 (PA4)
+
+  Switches (Logic input, asserted=LOW) latched to PORTA upper bits:
     Arm Beams Switch             D11 -> Flag D27 (PA5)
     CCS Power Allow Switch       D12 -> Flag D28 (PA6)
     Arm 80kV Switch              D13 -> Flag D29 (PA7)
@@ -126,8 +128,11 @@ static inline void printPgm(PGM_P p) {
 struct SwitchMeta { PGM_P name; uint8_t inPin; uint8_t flagPin; uint8_t portaBit; };
 struct CompMeta   { PGM_P name; uint8_t inPin; uint8_t flagPin; uint8_t compIdx; uint8_t portcBitPacked; };
 
-static const SwitchMeta SWITCHES[4] = {
-  { SW_NAME_3KV,   10, 26, 4 },
+static constexpr uint8_t PORTA_BIT_NOMOP = 3;
+static constexpr uint8_t PORTA_BIT_3KVTIMER = 4;
+static constexpr uint8_t MASK_SWITCH_LATCH_BITS = 0xE0;
+
+static const SwitchMeta SWITCH_LATCHES[3] = {
   { SW_NAME_BEAMS, 11, 27, 5 },
   { SW_NAME_CCS,   12, 28, 6 },
   { SW_NAME_80KV,  13, 29, 7 }
@@ -202,7 +207,11 @@ static inline Observe observeLogic() {
 }
 
 static inline bool isNomOpFromFlags(const Observe& o) {
-  return (o.porta & (1u << 3)) != 0; // D25 = bit3
+  return (o.porta & (1u << PORTA_BIT_NOMOP)) != 0; // D25 = bit3
+}
+
+static inline bool is3kVTimerFromFlags(const Observe& o) {
+  return (o.porta & (1u << PORTA_BIT_3KVTIMER)) != 0; // D26 = bit4, latched timer-event flag
 }
 
 // Friendly OBS print (pins + register bits + names)
@@ -217,14 +226,16 @@ static void printObserveDetailed(const Observe& o) {
   Serial.print(F("  D24 (PA2 bit2): A2 mirror (3kV Enable) = ")); Serial.println((o.porta & (1u<<2)) ? F("1") : F("0"));
   Serial.print(F("  D25 (PA3 bit3): Nom Op flag = "));
   Serial.println((o.porta & (1u<<3)) ? F("1 (NOM_OP)") : F("0 (INTERLOCK/TIMER)"));
+  Serial.print(F("  D26 (PA4 bit4): latched 3kV timer-event flag = "));
+  Serial.println((o.porta & (1u<<4)) ? F("1 (timer event seen since ACK)") : F("0"));
 
-  for (uint8_t i = 0; i < 4; i++) {
-    const uint8_t bit = SWITCHES[i].portaBit;
-    Serial.print(F("  D")); Serial.print(SWITCHES[i].flagPin);
+  for (uint8_t i = 0; i < 3; i++) {
+    const uint8_t bit = SWITCH_LATCHES[i].portaBit;
+    Serial.print(F("  D")); Serial.print(SWITCH_LATCHES[i].flagPin);
     Serial.print(F(" (PA")); Serial.print(bit);
     Serial.print(F(" bit")); Serial.print(bit);
     Serial.print(F("): "));
-    printPgm(SWITCHES[i].name);
+    printPgm(SWITCH_LATCHES[i].name);
     Serial.print(F(" (latched) = "));
     Serial.println((o.porta & (1u<<bit)) ? F("1") : F("0"));
   }
@@ -449,6 +460,24 @@ static bool expectNomOp(bool wantNomOp, uint16_t settleMs = DEFAULT_SETTLE_MS) {
   return true;
 }
 
+static bool expectTimerFlag(bool wantTimer, uint16_t settleMs = DEFAULT_SETTLE_MS) {
+  settle(settleMs);
+  Observe o = observeLogic();
+  const bool gotTimer = is3kVTimerFromFlags(o);
+
+  logPush(LOG_CHECK, TAG4('T','M','R','0'), (uint8_t)wantTimer, (uint8_t)gotTimer, o.porta);
+
+  if (gotTimer != wantTimer) {
+    logPush(LOG_FAIL, TAG4('T','M','R','F'), (uint8_t)wantTimer, (uint8_t)gotTimer, o.porta);
+    Serial.println(F("FAIL: latched 3kV timer-event flag mismatch"));
+    printObserveDetailed(o);
+    return false;
+  }
+
+  logPush(LOG_PASS, TAG4('T','M','R','P'), (uint8_t)wantTimer, (uint8_t)gotTimer, o.porta);
+  return true;
+}
+
 static bool expectOutputs(bool a0, bool a1, bool a2, bool led, uint16_t settleMs = DEFAULT_SETTLE_MS) {
   settle(settleMs);
   Observe o = observeLogic();
@@ -487,33 +516,32 @@ static bool expectOutputs(bool a0, bool a1, bool a2, bool led, uint16_t settleMs
   return true;
 }
 
-static uint8_t expectedSwitchLatchBits(bool sw3, bool beams, bool ccs, bool sw80) {
+static uint8_t expectedSwitchLatchBits(bool beams, bool ccs, bool sw80) {
   uint8_t v = 0;
-  if (sw3)   v |= (1u << 4);
   if (beams) v |= (1u << 5);
   if (ccs)   v |= (1u << 6);
   if (sw80)  v |= (1u << 7);
   return v;
 }
 
-static bool checkSwitchLatchExact(uint8_t wantUpperNibble, uint16_t settleMs = DEFAULT_SETTLE_MS) {
+static bool checkSwitchLatchExact(uint8_t wantLatchBits, uint16_t settleMs = DEFAULT_SETTLE_MS) {
   settle(settleMs);
   Observe o = observeLogic();
-  const uint8_t got = (uint8_t)(o.porta & 0xF0);
+  const uint8_t got = (uint8_t)(o.porta & MASK_SWITCH_LATCH_BITS);
 
-  logPush(LOG_CHECK, TAG4('S','L','A','0'), wantUpperNibble, got, o.porta);
+  logPush(LOG_CHECK, TAG4('S','L','A','0'), wantLatchBits, got, o.porta);
 
-  if (got != wantUpperNibble) {
-    logPush(LOG_FAIL, TAG4('S','L','A','F'), wantUpperNibble, got, o.porta);
+  if (got != wantLatchBits) {
+    logPush(LOG_FAIL, TAG4('S','L','A','F'), wantLatchBits, got, o.porta);
     Serial.print(F("FAIL: Switch latch mismatch. Want 0x"));
-    Serial.print(wantUpperNibble, HEX);
+    Serial.print(wantLatchBits, HEX);
     Serial.print(F(" got 0x"));
     Serial.println(got, HEX);
     printObserveDetailed(o);
     return false;
   }
 
-  logPush(LOG_PASS, TAG4('S','L','A','P'), wantUpperNibble, got, o.porta);
+  logPush(LOG_PASS, TAG4('S','L','A','P'), wantLatchBits, got, o.porta);
   return true;
 }
 
@@ -643,19 +671,19 @@ static void testSuiteSwitchLatchStackingAndAckClear() {
   beginSuite(300, F("SWITCH LATCH STACKING + ACK CLEAR"));
   suiteStart();
 
-  beginCase(301, F("ACK clear -> switch latch upper nibble should be 0x00"));
+  beginCase(301, F("ACK clear -> switch latch bits D27..D29 should be 0x00"));
   ackEdge();
   if (!checkSwitchLatchExact(0x00)) return;
 
-  beginCase(302, F("Latch accumulates as each switch is asserted"));
-  swOn(P.sw3kv);   if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,false,false,false))) return;
-  swOn(P.swBeams); if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,false,false))) return;
-  swOn(P.swCCS);   if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,true,false))) return;
-  swOn(P.sw80kv);  if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,true,true))) return;
+  beginCase(302, F("sw3kv is not latched on PORTA; D27..D29 accumulate as remaining switches assert"));
+  swOn(P.sw3kv);   if (!checkSwitchLatchExact(0x00)) return;
+  swOn(P.swBeams); if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,false,false))) return;
+  swOn(P.swCCS);   if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,false))) return;
+  swOn(P.sw80kv);  if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,true))) return;
 
   beginCase(303, F("Release all -> latch remains set until ACK"));
   swOff(P.sw3kv); swOff(P.swBeams); swOff(P.swCCS); swOff(P.sw80kv);
-  if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,true,true))) return;
+  if (!checkSwitchLatchExact(expectedSwitchLatchBits(true,true,true))) return;
 
   beginCase(304, F("ACK edge clears switch latch"));
   ackEdge();
@@ -663,7 +691,7 @@ static void testSuiteSwitchLatchStackingAndAckClear() {
 
   beginCase(305, F("Post-clear re-latch single switch (sw80kv)"));
   swOn(P.sw80kv);
-  if (!checkSwitchLatchExact(expectedSwitchLatchBits(false,false,false,true))) return;
+  if (!checkSwitchLatchExact(expectedSwitchLatchBits(false,false,true))) return;
 }
 
 static void testSuiteComparatorLatchStackingAndAckClear() {
@@ -736,7 +764,9 @@ static void testSuite3kVSpecific() {
   ackEdge();
   if (!checkComparatorLatchExact(0x00)) return;
 
-  delay(LOGIC_TIMER_3KV_MS + 10); // wait till back in interlock state
+  delay(LOGIC_TIMER_3KV_MS + 10); // wait until timer state ends
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 
   compFault(COMP_IDX_3KV_V);
   if (!checkComparatorLatchHas(bitForCompIdx(COMP_IDX_3KV_V))) return;
@@ -755,6 +785,7 @@ static void testSuite3kVSpecific() {
   compFault(COMP_IDX_3KV_V);
   delay(2);
   if (!expectNomOp(false)) return;
+  if (!expectTimerFlag(false)) return;
   if (!expectOutputs(false,false,true,true)) return;
   compSafe(COMP_IDX_3KV_V);
 
@@ -762,9 +793,13 @@ static void testSuite3kVSpecific() {
   delay(2);
   compSafe(COMP_IDX_3KV_I);
   if (!expectNomOp(false)) return;
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,false,true)) return;
   delay(LOGIC_TIMER_3KV_MS + 10);
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,true,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 
   beginCase(603, F("NOM_OP: timer entry on 3kV V OR 3kV I"));
   swOn(P.sw80kv);
@@ -777,9 +812,13 @@ static void testSuite3kVSpecific() {
   delay(2);
   compSafe(COMP_IDX_3KV_V);
   if (!expectNomOp(false)) return;
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,false,true)) return;
   delay(LOGIC_TIMER_3KV_MS + 10);
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,true,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 
   swOn(P.sw80kv);
   swOn(P.sw3kv);
@@ -790,9 +829,44 @@ static void testSuite3kVSpecific() {
   delay(2);
   compSafe(COMP_IDX_3KV_I);
   if (!expectNomOp(false)) return;
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,false,true)) return;
   delay(LOGIC_TIMER_3KV_MS + 10);
+  if (!expectTimerFlag(true)) return;
   if (!expectOutputs(false,false,true,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
+
+  suiteStart();
+
+  beginCase(604, F("ACK during active 3kV timer clears D26 until the next timer-state entry"));
+  swOn(P.sw3kv);
+  if (!expectNomOp(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+  if (!expectTimerFlag(false)) return;
+
+  compFault(COMP_IDX_3KV_I);
+  delay(2);
+  compSafe(COMP_IDX_3KV_I);
+  if (!expectNomOp(false)) return;
+  if (!expectTimerFlag(true)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+
+  delay(LOGIC_TIMER_3KV_MS + 10);
+  if (!expectTimerFlag(false)) return;
+  if (!expectOutputs(false,false,true,true)) return;
+
+  compFault(COMP_IDX_3KV_I);
+  delay(2);
+  compSafe(COMP_IDX_3KV_I);
+  if (!expectTimerFlag(true)) return;
+  if (!expectOutputs(false,false,false,true)) return;
+  ackEdge();
+  if (!expectTimerFlag(false)) return;
 }
 
 static void testSuiteNomOpEntryBlockedCases() {
@@ -985,15 +1059,19 @@ static void printMap() {
   Serial.println(F("  D23 (PA1 bit1): A1 mirror (Beam Enable output)"));
   Serial.println(F("  D24 (PA2 bit2): A2 mirror (3kV Enable output)"));
   Serial.println(F("  D25 (PA3 bit3): Nom Op flag"));
-  for (uint8_t i = 0; i < 4; i++) {
-    Serial.print(F("  D")); Serial.print(SWITCHES[i].flagPin);
-    Serial.print(F(" (PA")); Serial.print(SWITCHES[i].portaBit);
-    Serial.print(F(" bit")); Serial.print(SWITCHES[i].portaBit);
+  Serial.println(F("  D26 (PA4 bit4): latched 3kV timer-event flag"));
+  for (uint8_t i = 0; i < 3; i++) {
+    Serial.print(F("  D")); Serial.print(SWITCH_LATCHES[i].flagPin);
+    Serial.print(F(" (PA")); Serial.print(SWITCH_LATCHES[i].portaBit);
+    Serial.print(F(" bit")); Serial.print(SWITCH_LATCHES[i].portaBit);
     Serial.print(F("): "));
-    printPgm(SWITCHES[i].name);
-    Serial.print(F("  (Logic input D")); Serial.print(SWITCHES[i].inPin);
-    Serial.println(F(")"));
+    printPgm(SWITCH_LATCHES[i].name);
+    Serial.print(F("  (Logic input D")); Serial.print(SWITCH_LATCHES[i].inPin);
+    Serial.println(F(", latched)"));
   }
+  Serial.print(F("  "));
+  printPgm(SW_NAME_3KV);
+  Serial.println(F(" raw state is no longer latched on PORTA."));
 
   Serial.println(F("\nPORTC / D30..D37 (packed bit0..7 corresponds to D30..D37):"));
   for (uint8_t i = 0; i < 8; i++) {

@@ -27,7 +27,7 @@ The `+3 kV` monitor has extra firmware responsibilities. In addition to monitori
 | `A0` | Current threshold pot input | Internal ADC |
 | `A1` | Voltage threshold pot input | Internal ADC |
 | `D6` | Matsusada reset LED | Used on `ps_id = 1, 2` only |
-| `D7` | HV enable switch input | Common firmware input; for `+3 kV` this is shorted to `D10` on the shield per the dev spec |
+| `D7` | HV enable switch input | Common firmware input; for `+3 kV` this is the raw `3 kV Enable` switch request and is reported through the common HV-enable register |
 | `D17` | RS-485 direction control | `low = receive`, transceiver controlled by firmware |
 | `D18` | `TX1` | Modbus RTU transmit |
 | `D19` | `RX1` | Modbus RTU receive |
@@ -46,7 +46,9 @@ The `+3 kV` monitor has extra firmware responsibilities. In addition to monitori
 | `D23` | Logic Arduino `Arm Beams` output state |
 | `D24` | Logic Arduino `3 kV Enable` output state |
 | `D25` | Logic Arduino `Nom Op` flag |
-| `D26-D37` | Logic Arduino latched flags |
+| `D26` | Logic Arduino latched `3 kV Timer Event` flag |
+| `D27-D29` | Logic Arduino latched switch-history flags |
+| `D30-D37` | Logic Arduino latched comparator-history flags |
 
 > Only the `+3 kV` monitor reads Logic Arduino status. The other three monitor Arduinos only report their local supply telemetry and enable state.
 
@@ -191,8 +193,8 @@ The code clamps negative or over-range ADS1115 raw values before scaling and cla
 The current firmware exposes one contiguous register array:
 
 - `IREG_COUNT = 5`
-- `DINPUT_COUNT = 20`
-- `TOTAL_REG_COUNT = 25`
+- `DINPUT_COUNT = 19`
+- `TOTAL_REG_COUNT = 24`
 
 ### Common Input Registers
 
@@ -202,7 +204,7 @@ The current firmware exposes one contiguous register array:
 | `1` | `IREG_V_SET_ADDR` | Programmed HV, rounded to integer volts |
 | `2` | `IREG_V_READ_ADDR` | Measured HV, rounded to integer volts |
 | `3` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
-| `4` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` reset-event counter |
+| `4` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` timer/reset-event counter |
 
 ### Common Boolean / State Registers
 
@@ -220,19 +222,18 @@ The current firmware exposes one contiguous register array:
 | `9` | `DINPUT_CCSPOWER_ADDR` | Logic Arduino CCS Power output state |
 | `10` | `DINPUT_3KV_ENABLE_ADDR` | Logic Arduino 3 kV enable output state |
 | `11` | `DINPUT_NOMOP_FLAG_ADDR` | Logic Arduino Nom Op flag |
-| `12` | `DINPUT_3K_HVENABLE_FLAG_ADDR` | 3 kV enable-related flag |
-| `13` | `DINPUT_ARMBEAMS_FLAG_ADDR` | Arm Beams-related flag |
-| `14` | `DINPUT_CCSPOWER_FLAG_ADDR` | CCS Power-related flag |
-| `15` | `DINPUT_ARM80KV_FLAG_ADDR` | Arm 80 kV-related flag |
-| `16` | `DINPUT_1K_VCOMP_FLAG_ADDR` | `+1 kV` undervoltage flag |
-| `17` | `DINPUT_1K_ICOMP_FLAG_ADDR` | `+1 kV` overcurrent flag |
-| `18` | `DINPUT_NEG_1K_VCOMP_FLAG_ADDR` | `-1 kV` undervoltage flag |
-| `19` | `DINPUT_NEG_1K_ICOMP_FLAG_ADDR` | `-1 kV` overcurrent flag |
-| `20` | `DINPUT_20K_VCOMP_FLAG_ADDR` | `+20 kV` undervoltage flag |
-| `21` | `DINPUT_20K_ICOMP_FLAG_ADDR` | `+20 kV` overcurrent flag |
-| `22` | `DINPUT_3K_VCOMP_FLAG_ADDR` | `+3 kV` undervoltage flag |
-| `23` | `DINPUT_3K_ICOMP_FLAG_ADDR` | `+3 kV` overcurrent flag |
-| `24` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
+| `12` | `DINPUT_ARMBEAMS_FLAG_ADDR` | Arm Beams-related flag |
+| `13` | `DINPUT_CCSPOWER_FLAG_ADDR` | CCS Power-related flag |
+| `14` | `DINPUT_ARM80KV_FLAG_ADDR` | Arm 80 kV-related flag |
+| `15` | `DINPUT_1K_VCOMP_FLAG_ADDR` | `+1 kV` undervoltage flag |
+| `16` | `DINPUT_1K_ICOMP_FLAG_ADDR` | `+1 kV` overcurrent flag |
+| `17` | `DINPUT_NEG_1K_VCOMP_FLAG_ADDR` | `-1 kV` undervoltage flag |
+| `18` | `DINPUT_NEG_1K_ICOMP_FLAG_ADDR` | `-1 kV` overcurrent flag |
+| `19` | `DINPUT_20K_VCOMP_FLAG_ADDR` | `+20 kV` undervoltage flag |
+| `20` | `DINPUT_20K_ICOMP_FLAG_ADDR` | `+20 kV` overcurrent flag |
+| `21` | `DINPUT_3K_VCOMP_FLAG_ADDR` | `+3 kV` undervoltage flag |
+| `22` | `DINPUT_3K_ICOMP_FLAG_ADDR` | `+3 kV` overcurrent flag |
+| `23` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
 
 ---
 
@@ -271,19 +272,22 @@ For `DINPUT_HVENABLE_ADDR`, the current code treats the `+20 kV` HV enable telem
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
 - Reads Logic Arduino output-state lines on `D22-D24`
-- Reads logic flags on `D25-D37`
+- Reads the live `Nom Op` flag on `D25`
+- Reads latched logic-history flags on `D26-D37`
 - Reads raw Arm 80 kV switch state on `D8`
+- Reads the raw `3 kV Enable` switch request on `D7`
 - Reads Logic Arduino ack-back on `D9`
 - Toggles the flags acknowledge line on `D14`
 
 The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs on `D11` and `D12`, but the published Modbus map currently exposes the Logic Arduino output-state lines on `D22` and `D23` for those functions.
 
-It also runs `check3KVResetState()` and exposes a `3 kV` reset-event counter in Modbus register `4`.
+The dedicated `3kV_HVEnable_Flag` Modbus register has been removed. The raw `3 kV Enable` switch request on `D7` is now reported only through the common HV-enable register at address `5`.
+
+It also tracks a `3 kV` timer/reset-event counter in Modbus register `4`.
 
 Current implementation detail: the counter increments when:
 
-- `Nom Op` falls and the `+3 kV` undervoltage flag is asserted, or
-- The `+3 kV` overcurrent flag is asserted
+- The latched `D26` timer-event flag rises
 
 It resets to `0` when `Nom Op` rises.
 

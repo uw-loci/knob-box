@@ -61,7 +61,7 @@ Core jobs:
 - Sample the operator intent switches used by the interlock path
 - Decide whether the system is in `Beam Interlock`, `Normal Operation`, or `3 kV Timer`
 - Drive the real `CCS Power Enable`, `Arm Beams`, and `3 kV Enable` outputs
-- Publish latched interlock information to the `+3 kV` monitor Arduino
+- Publish live logic state and latched interlock information to the `+3 kV` monitor Arduino
 
 ## 3. System Architecture
 
@@ -99,7 +99,7 @@ Dashboard
 | Dashboard | Polls the monitoring Arduinos over `RS-485 / Modbus RTU`; receives telemetry, switch state, interlock state, and `+3 kV` logic status |
 | HV power supplies | Provide analog telemetry (`Vset`, `Vmon`, `Imon`); receive enable control signals; Matsusadas also have reset handling via the panel |
 | Logic Arduino | Consumes comparator and switch inputs; drives actual safety-critical outputs; publishes interlock status to the `+3 kV` monitor |
-| `+3 kV` monitor Arduino | Reads Logic Arduino output mirrors, latched flags, raw switch states, and heartbeat handshake pins; republishes them to the Dashboard |
+| `+3 kV` monitor Arduino | Reads Logic Arduino output mirrors, live flags, latched flags, raw switch states, and heartbeat handshake pins; republishes them to the Dashboard |
 | Beam Controller / BCON | Receives the real beam-enable / beam-interlock signal from the Logic Arduino |
 | CCS relay path | Receives the real CCS enable signal from the Logic Arduino |
 | Glassman `+80 kV` interlock path | User-controlled arm switch is read by the Logic Arduino and is required before entering normal operation |
@@ -228,24 +228,13 @@ The Logic Arduino exports two kinds of information to the `+3 kV` monitor:
 
 #### Latched event / fault flags
 
-- `D26-D29`: latched switch-related flags
+- `D26`: latched `3 kV Timer` event flag
+- `D27-D29`: latched switch-related flags
 - `D30-D37`: latched comparator fault flags
 
-In the current implementation, these latched flags persist until the `+3 kV` monitor acknowledges that it has read them.
+In the current implementation, the latched flags on `D26-D37` persist until the `+3 kV` monitor acknowledges that it has read them. `D25` remains live.
 
-### Raw switch intent lines also seen by the `+3 kV` monitor
-
-The `+3 kV` monitor directly reads:
-
-- `Arm 80 kV`
-- `3 kV Enable`
-- `Arm Beams`
-- `CCS Power`
-
-This is important because it lets the Dashboard distinguish:
-
-- what the user requested at the panel
-- from what the Logic Arduino is actually allowing at the outputs
+The current `+3 kV` monitor firmware uses the latched `D26` timer-event flag internally to maintain its `3 kV` timer/reset-event counter.
 
 ### ACK / ACK-back handshake
 
@@ -269,13 +258,6 @@ When the Logic Arduino sees the ACK edge:
 
 The `+3 kV` monitor samples `D9` on its periodic cycle. If `D9` changed since the previous sample, it sets the `logic alive` status in the Modbus map.
 
-### Why this matters
-
-This interface gives the Dashboard three classes of logic-related information:
-
-- Real-time logic output state
-- Latched recent interlock history
-- A proof-of-life indication that the Logic Arduino is still executing
 
 ## 8. Software Meaning of the Front Panel
 
@@ -301,8 +283,6 @@ The code and operating manual both make a key distinction:
 - Actual `3 kV` enable
 
 This means the user can place `Arm Beams` or `CCS Power` switches in the `ON` position while the system still behaves as OFF because the Logic Arduino is holding the safe state.
-
-That distinction is one of the main reasons the `+3 kV` monitor forwards both raw switch state and logic output state to the Dashboard.
 
 ## 9. Interaction With External Systems
 

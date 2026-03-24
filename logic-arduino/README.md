@@ -7,7 +7,7 @@ This firmware (`logic_arduino.cpp`) implements the **Logic Arduino** portion of 
   - **CCS Enable** (A0 / PF0)
   - **Beam Enable** (A1 / PF1)
   - **3kV Enable** (A2 / PF2)
-- Publishes **status + event flags** on two 8‑bit ports for the 3kV Monitoring Arduino to read.
+- Publishes **live status + latched event flags** on two 8-bit ports for the 3kV Monitoring Arduino to read.
 - Uses an **ACK toggle input** on **D14 / PJ1** to clear latched event flags after the 3kV Monitoring Arduino reads flags.
 - Drives an **ACK echo / ack-back output** on **D9 / PH6** that toggles on every observed ACK edge so the monitor Arduino can verify that the Logic Arduino is alive.
 
@@ -129,7 +129,7 @@ s.ackLevel = (PINJ & MASK_ACK) != 0;
 
 Two 8‑bit ports are dedicated to flag outputs:
 
-### PORTA (D22–D29): live outputs + NomOp + latched switch events
+### PORTA (D22-D29): live outputs + Nom Op state + latched event flags
 `PORTA` is rebuilt and written every `step()`:
 
 | Flag Name | Flag Pin | AVR Port/Bit | Source | Latched? | Meaning |
@@ -138,17 +138,19 @@ Two 8‑bit ports are dedicated to flag outputs:
 | Beam Enable | D23 | PA1 | `out.armBeamsEnable` | No | Mirrors current Beam enable output |
 | 3kV HV Enable | D24 | PA2 | `out.enable3kV` | No | Mirrors current 3kV enable output |
 | Nom Op | D25 | PA3 | `out.nomOp` | No | 1 = in `STATE_NOM_OP` |
-| 3kV HV Output Enable Switch | D26 | PA4 | `prevFlagsSwitches` (PB4) | Yes | Switch asserted at least once since last ACK toggle |
-| Arm Beams Switch | D27 | PA5 | `prevFlagsSwitches` (PB5) | Yes | Switch asserted at least once since last ACK toggle |
-| CCS Power Allow Switch | D28 | PA6 | `prevFlagsSwitches` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
-| Arm 80kV Switch | D29 | PA7 | `prevFlagsSwitches` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
+| 3kV Timer Event | D26 | PA4 | `latched3kVTimerFlag` set on entry to `STATE_3KV_TIMER` | Yes | 1 = a 3kV timer interval occurred since the last ACK toggle |
+| Arm Beams Switch | D27 | PA5 | `latchedSwitchFlags` (PB5) | Yes | Switch asserted at least once since last ACK toggle |
+| CCS Power Allow Switch | D28 | PA6 | `latchedSwitchFlags` (PB6) | Yes | Switch asserted at least once since last ACK toggle |
+| Arm 80kV Switch | D29 | PA7 | `latchedSwitchFlags` (PB7) | Yes | Switch asserted at least once since last ACK toggle |
+
+`D26` is not a live state mirror. The firmware latches `latched3kVTimerFlag` only when the state machine enters `STATE_3KV_TIMER`, and keeps that event visible on `D26` until the next ACK toggle clears it.
 
 ### PORTC (D30–D37): latched comparator fault events
-`PORTC` reflects `prevFlagsComparators`, a sticky OR of `PINL` since last ACK toggle:
+`PORTC` reflects `latchedComparatorFlags`, a sticky OR of `PINL` since last ACK toggle:
 
 ```cpp
-prevFlagsComparators |= sample.comparators; // sample.comparators = PINL
-PORTC = prevFlagsComparators;
+latchedComparatorFlags |= sample.comparators; // sample.comparators = PINL
+PORTC = latchedComparatorFlags;
 ```
 
 **Bit-ordering note:** `PINL` bits are copied into `PORTC` bits directly. Physical Arduino pin numbering on PORTC is reversed relative to bit indices:
@@ -170,23 +172,25 @@ PORTC = prevFlagsComparators;
 
 ## ACK toggle-to-clear protocol (D14 / PJ1)
 
-`write_flags()` uses an ACK level change to clear the latched event flags:
+An ACK level change clears the latched event flags before the current step rebuilds the flag outputs:
 
-- `prevFlagsComparators` (latched comparator faults)
-- `prevFlagsSwitches` (latched switch assertions)
+- `latchedComparatorFlags` (latched comparator faults)
+- `latched3kVTimerFlag` (latched `D26` 3kV timer-event flag)
+- `latchedSwitchFlags` (latched `Arm Beams`, `CCS Power Allow`, and `Arm 80kV` switch assertions)
 
 Any edge (low→high or high→low) clears the latches:
 
 ```cpp
-if (sample.ackLevel != prevAck) {
-  prevFlagsComparators = 0;
-  prevFlagsSwitches    = 0;
+if (ackLevel != prevAckLevel) {
+  latchedComparatorFlags = 0;
+  latchedSwitchFlags = 0;
+  latched3kVTimerFlag = false;
   ackEchoState = !ackEchoState;
 }
-prevAck = sample.ackLevel;
+prevAckLevel = ackLevel;
 ```
 
-This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches flags**.
+This supports a 3kV monitor-side handshake of **read flags → toggle ACK → Logic Arduino clears/re-latches sticky history**. `D25` (`Nom Op`) remains live; `D26-D37` are sticky history/event flags.
 
 ### ACK echo / ack-back protocol (D9 / PH6)
 
@@ -194,7 +198,7 @@ Behavior:
 
 - The 3kV Monitor Arduino toggles the ACK line on **D14 / PJ1** after reading the flag pins.
 - The Logic Arduino samples D14 in `sample_inputs()`.
-- When `write_flags()` detects that `sample.ackLevel != prevAck`, it:
+- When `handle_ack_toggle()` detects that `ackLevel != prevAckLevel`, it:
   - clears the latched flag history, and
   - toggles `ackEchoState`.
 - `write_outputs()` then drives `ackEchoState` out on **D9 / PH6**.
@@ -282,6 +286,7 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: OFF
 - 3kV enable: follows **debounced** 3kV switch (`sw_3kv_enable`)
 - `nomOp`: 0
+- D26 timer-event latch: unchanged
 
 ---
 
@@ -299,6 +304,7 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: follows debounced arm beams switch (`sw_arm_beams`, D11)
 - 3kV enable: follows debounced 3kV switch (`sw_3kv_enable`, D10)
 - `nomOp`: 1
+- D26 timer-event latch: unchanged
 
 ---
 
@@ -319,6 +325,9 @@ Each `loop()` iteration calls `step()`:
 - Beam enable: OFF
 - 3kV enable: OFF
 - `nomOp`: 0
+- Entering this state sets the D26 timer-event latch high once
+
+At the pin level, `D26` can remain HIGH after the state machine leaves `STATE_3KV_TIMER`; the 3kV monitor must toggle ACK to clear that latched event indication.
 
 ---
 
@@ -479,7 +488,7 @@ flowchart TD
    `DEBOUNCE_BITS` is a sample count; any change in loop timing changes debounce time.
 
 2. **Ack-back may toggle once during startup if D14 is already HIGH at boot.**  
-   `write_flags()` initializes its local `prevAck` to `false` and is called once during `setup()` after sampling D14. If the ACK input is already HIGH on that first call, the code will treat that as an ACK edge, clear the latches, and toggle `ackEchoState` once before normal runtime begins.
+   `handle_ack_toggle()` initializes `prevAckLevel` to `false` and is called once during `setup()` after sampling D14. If the ACK input is already HIGH on that first call, the code will treat that as an ACK edge, clear the latches, and toggle `ackEchoState` once before normal runtime begins.
 
    This does not break the ongoing ack-back handshake, but it can create one startup transition on D9 that is caused by initialization rather than by a fresh monitor-issued ACK toggle.
 ---
