@@ -215,16 +215,16 @@ The current firmware exposes one contiguous register array:
 
 `DINPUT_UNLATCHED_SIGNALS_ADDR` bit layout:
 
-| Bit | Source | Meaning |
-|-----|--------|---------|
-| `0` | `D7` | HV enable switch state |
-| `1` | internal state | Matsusada reset-state indication (`ps_id = 1, 2`) |
-| `2` | `D8` | Arm 80 kV enable switch (`ps_id = 4`) |
-| `3` | `D22` | CCS Power Enable output signal (`ps_id = 4`) |
-| `4` | `D23` | Arm Beams Enable output signal (`ps_id = 4`) |
-| `5` | `D24` | `3 kV` HV Enable output signal (`ps_id = 4`) |
-| `6` | `D25` | Nom Op signal (`ps_id = 4`) |
-| `7` | derived from `D9` edge detect | Logic Arduino alive signal (`ps_id = 4`) |
+| Bit | Name | Source | Meaning |
+|-----|------|--------|---------|
+| `0` | `HV Enable` | `D7` | HV enable switch state |
+| `1` | `Reset State 1kV` | internal state | Matsusada reset-state indication (`ps_id = 1, 2`) |
+| `2` | `Arm 80kV Enable` | `D8` | Arm 80 kV enable switch (`ps_id = 4`) |
+| `3` | `CCS Power Enable` | `D22` | CCS Power Enable output signal (`ps_id = 4`) |
+| `4` | `Arm Beams Enable` | `D23` | Arm Beams Enable output signal (`ps_id = 4`) |
+| `5` | `3kV HV Enable` | `D24` | `3 kV` HV Enable output signal (`ps_id = 4`) |
+| `6` | `Nom Op` | `D25` | Nom Op signal (`ps_id = 4`) |
+| `7` | `Logic Alive` | derived from `D9` edge detect | Logic Arduino alive signal (`ps_id = 4`) |
 
 `DINPUT_LATCHED_FLAGS_ADDR` bit layout:
 
@@ -245,13 +245,19 @@ The current firmware exposes one contiguous register array:
 
 Bits `0-3` are currently unused and remain `0`.
 
+Per-supply use of the packed DINPUT registers:
+
+- `ps_id = 1, 2`: unlatched bits `0-1` are used; latched word remains `0`
+- `ps_id = 3`: unlatched bit `0` is used; latched word remains `0`
+- `ps_id = 4`: unlatched bits `0`, `2-7` are used; latched bits `4-15` are used
+
 ---
 
 ## Supply-Specific Firmware Behavior
 
 ### Matsusada Variants (`ps_id = 1, 2`)
 
-The Matsusada variants run `checkMatsusadaResetState()`.
+The Matsusada variants drive unlatched-signals bit `1` through `checkMatsusadaResetState()`.
 
 The firmware marks a potential reset state when:
 
@@ -281,10 +287,10 @@ For `DINPUT_UNLATCHED_SIGNALS_ADDR` bit `0`, the current code treats the `+20 kV
 
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
-- Packs the unlatched signals on `D8`, `D22-D25`, and the logic-alive edge detect into `DINPUT_UNLATCHED_SIGNALS_ADDR`
-- Packs the latched flags on `D26-D37` into `DINPUT_LATCHED_FLAGS_ADDR`, keeping `D26 -> bit 4` through `D37 -> bit 15`
-- Reports the raw `3 kV Enable` switch request on `D7` through unlatched-signals bit `0`
-- Reads Logic Arduino ack-back on `D9` and maps the existing edge-detect behavior to unlatched-signals bit `7`
+- Uses `DINPUT_UNLATCHED_SIGNALS_ADDR` for the shared HV-enable input on `D7`, the raw Arm 80 kV switch on `D8`, the live Logic Arduino signals on `D22-D25`, and the logic-alive edge detect derived from `D9`
+- Uses `DINPUT_LATCHED_FLAGS_ADDR` for the latched Logic Arduino flags on `D26-D37`, keeping `D26 -> bit 4` through `D37 -> bit 15`
+- Keeps `D25` (`Nom Op`) in the unlatched word and `D26-D37` in the latched word
+- Maps the existing ack-back edge-detect behavior on `D9` to unlatched-signals bit `7`
 - Toggles the flags acknowledge line on `D14`
 
 The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs on `D11` and `D12`, but the published Modbus map currently exposes the Logic Arduino output-state lines on `D22` and `D23` for those functions.
