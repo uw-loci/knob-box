@@ -43,23 +43,16 @@ Input Registers (Function Code 04)
 
 /*
 "Discrete Inputs" (really also input registers)
-The Logic Arduino flags on D22-D37 are packed into one 16-bit register.
-Other boolean/state registers remain unpacked for now.
+The monitor exposes two packed DINPUT registers:
+    5 = unlatched signals
+    6 = latched flags
 */
-#define DINPUT_HVENABLE_ADDR            5
-// Just for matsusadas
-#define DINPUT_RESET_STATE_1KV_ADDR     6
-// Just for 3kV Bertan
-
-// (raw switch states)
-#define DINPUT_ARM80KV_ADDR             7
-// Packed D22-D37 flags word. Bit 0 = D22, ..., bit 15 = D37.
-#define DINPUT_FLAGS_WORD_ADDR          8
-#define DINPUT_LOGIC_ALIVE_ADDR         9   // 1 when Logic Arduino responded to the previous ACK cycle
+#define DINPUT_UNLATCHED_SIGNALS_ADDR   5
+#define DINPUT_LATCHED_FLAGS_ADDR       6
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              5
-#define DINPUT_COUNT            5
+#define DINPUT_COUNT            2
 #define TOTAL_REG_COUNT         (IREG_COUNT + DINPUT_COUNT)
 //============================================================
 //============================================================
@@ -88,12 +81,13 @@ Other boolean/state registers remain unpacked for now.
 #define FLAGS_ACK_PIN                   14      // ack pin to Logic Arduino
 #define LOGIC_ACK_ECHO_PIN              9       // ACK-back from Logic Arduino (toggles when Logic observes ACK edge)
 
-// (logic arduino outputs)
+// (logic arduino outputs / live signals)
 #define OUTPUT_CCSPOWER_PIN             22
 #define OUTPUT_ARMBEAMS_PIN             23
 #define OUTPUT_3KV_ENABLE_PIN           24
-// (flags)
-#define FLAG_NOMOP_PIN                  25
+// (live signal)
+#define FLAG_NOMOP_PIN                  25      // Logic Arduino live Nom Op signal
+// (latched flags)
 #define FLAG_3KV_TIMER_PIN              26      // Logic Arduino latched 3kV timer-event flag
 #define FLAG_ARMBEAMS_PIN               27
 #define FLAG_CCSPOWER_PIN               28
@@ -107,22 +101,27 @@ Other boolean/state registers remain unpacked for now.
 #define FLAG_3K_VCOMP_PIN               36
 #define FLAG_3K_ICOMP_PIN               37
 
-const uint16_t FLAG_MASK_CCSPOWER_ENABLE   = ((uint16_t)1 <<  0);  // D22
-const uint16_t FLAG_MASK_ARMBEAMS_SIGNAL   = ((uint16_t)1 <<  1);  // D23
-const uint16_t FLAG_MASK_3KV_ENABLE_SIGNAL = ((uint16_t)1 <<  2);  // D24
-const uint16_t FLAG_MASK_NOMOP             = ((uint16_t)1 <<  3);  // D25
-const uint16_t FLAG_MASK_3KV_TIMER         = ((uint16_t)1 <<  4);  // D26
-const uint16_t FLAG_MASK_ARMBEAMS_SWITCH   = ((uint16_t)1 <<  5);  // D27
-const uint16_t FLAG_MASK_CCSPOWER_ALLOW    = ((uint16_t)1 <<  6);  // D28
-const uint16_t FLAG_MASK_ARM80KV_SWITCH    = ((uint16_t)1 <<  7);  // D29
-const uint16_t FLAG_MASK_1K_VCOMP          = ((uint16_t)1 <<  8);  // D30
-const uint16_t FLAG_MASK_1K_ICOMP          = ((uint16_t)1 <<  9);  // D31
-const uint16_t FLAG_MASK_NEG_1K_VCOMP      = ((uint16_t)1 << 10);  // D32
-const uint16_t FLAG_MASK_NEG_1K_ICOMP      = ((uint16_t)1 << 11);  // D33
-const uint16_t FLAG_MASK_20K_VCOMP         = ((uint16_t)1 << 12);  // D34
-const uint16_t FLAG_MASK_20K_ICOMP         = ((uint16_t)1 << 13);  // D35
-const uint16_t FLAG_MASK_3K_VCOMP          = ((uint16_t)1 << 14);  // D36
-const uint16_t FLAG_MASK_3K_ICOMP          = ((uint16_t)1 << 15);  // D37
+const uint16_t UNLATCHED_SIGNAL_MASK_HVENABLE         = ((uint16_t)1 << 0);   // D7
+const uint16_t UNLATCHED_SIGNAL_MASK_RESET_STATE_1KV  = ((uint16_t)1 << 1);   // reset state
+const uint16_t UNLATCHED_SIGNAL_MASK_ARM80KV_ENABLE   = ((uint16_t)1 << 2);   // D8
+const uint16_t UNLATCHED_SIGNAL_MASK_CCSPOWER_ENABLE  = ((uint16_t)1 << 3);   // D22
+const uint16_t UNLATCHED_SIGNAL_MASK_ARMBEAMS_ENABLE  = ((uint16_t)1 << 4);   // D23
+const uint16_t UNLATCHED_SIGNAL_MASK_3KV_ENABLE       = ((uint16_t)1 << 5);   // D24
+const uint16_t UNLATCHED_SIGNAL_MASK_NOMOP            = ((uint16_t)1 << 6);   // D25
+const uint16_t UNLATCHED_SIGNAL_MASK_LOGIC_ALIVE      = ((uint16_t)1 << 7);   // logic alive edge observed
+
+const uint16_t LATCHED_FLAG_MASK_3KV_TIMER            = ((uint16_t)1 <<  4);  // D26
+const uint16_t LATCHED_FLAG_MASK_ARMBEAMS_SWITCH      = ((uint16_t)1 <<  5);  // D27
+const uint16_t LATCHED_FLAG_MASK_CCSPOWER_ALLOW       = ((uint16_t)1 <<  6);  // D28
+const uint16_t LATCHED_FLAG_MASK_ARM80KV_SWITCH       = ((uint16_t)1 <<  7);  // D29
+const uint16_t LATCHED_FLAG_MASK_1K_VCOMP             = ((uint16_t)1 <<  8);  // D30
+const uint16_t LATCHED_FLAG_MASK_1K_ICOMP             = ((uint16_t)1 <<  9);  // D31
+const uint16_t LATCHED_FLAG_MASK_NEG_1K_VCOMP         = ((uint16_t)1 << 10);  // D32
+const uint16_t LATCHED_FLAG_MASK_NEG_1K_ICOMP         = ((uint16_t)1 << 11);  // D33
+const uint16_t LATCHED_FLAG_MASK_20K_VCOMP            = ((uint16_t)1 << 12);  // D34
+const uint16_t LATCHED_FLAG_MASK_20K_ICOMP            = ((uint16_t)1 << 13);  // D35
+const uint16_t LATCHED_FLAG_MASK_3K_VCOMP             = ((uint16_t)1 << 14);  // D36
+const uint16_t LATCHED_FLAG_MASK_3K_ICOMP             = ((uint16_t)1 << 15);  // D37
 
 /**
  * Other declarations and initializations
@@ -135,8 +134,7 @@ float               programmedHV_V;                 // ""
 float               iPot_V;                         // potentiometer values
 float               vPot_V;                         // ""  
 float               thresholdHV_V;                  // thresholds
-float               thresholdI_mA;                  // ""
-bool                resetState1kV = false;          // for Matsusada reset state logic            
+float               thresholdI_mA;                  // ""           
 bool                ack_state = false;              // false = HI-Z, true = LOW
 bool                prevLogicAckEcho = false;       // D9 state sampled on previous 150 ms cycle
 char                buffer[21];                     // store formatted string to print to LCD
@@ -182,28 +180,68 @@ static inline int16_t clamp_i16_positive(float x)
     else return (int16_t)x;
 }
 
-static inline uint16_t readFlagsWord()
+static inline bool readHVEnableSwitchSignal()
+{
+    if (ps_id == 3) {
+        // for +20kV Bertan, signal is active-high
+        return digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH;
+    }
+
+    return digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
+}
+
+static inline uint16_t readLatchedFlagsWord()
 {
     uint16_t flags = 0;
 
-    flags |= (digitalRead(OUTPUT_CCSPOWER_PIN)   == HIGH) ? FLAG_MASK_CCSPOWER_ENABLE   : 0;
-    flags |= (digitalRead(OUTPUT_ARMBEAMS_PIN)   == HIGH) ? FLAG_MASK_ARMBEAMS_SIGNAL   : 0;
-    flags |= (digitalRead(OUTPUT_3KV_ENABLE_PIN) == HIGH) ? FLAG_MASK_3KV_ENABLE_SIGNAL : 0;
-    flags |= (digitalRead(FLAG_NOMOP_PIN)        == HIGH) ? FLAG_MASK_NOMOP             : 0;
-    flags |= (digitalRead(FLAG_3KV_TIMER_PIN)    == HIGH) ? FLAG_MASK_3KV_TIMER         : 0;
-    flags |= (digitalRead(FLAG_ARMBEAMS_PIN)     == HIGH) ? FLAG_MASK_ARMBEAMS_SWITCH   : 0;
-    flags |= (digitalRead(FLAG_CCSPOWER_PIN)     == HIGH) ? FLAG_MASK_CCSPOWER_ALLOW    : 0;
-    flags |= (digitalRead(FLAG_ARM80KV_PIN)      == HIGH) ? FLAG_MASK_ARM80KV_SWITCH    : 0;
-    flags |= (digitalRead(FLAG_1K_VCOMP_PIN)     == HIGH) ? FLAG_MASK_1K_VCOMP          : 0;
-    flags |= (digitalRead(FLAG_1K_ICOMP_PIN)     == HIGH) ? FLAG_MASK_1K_ICOMP          : 0;
-    flags |= (digitalRead(FLAG_NEG_1K_VCOMP_PIN) == HIGH) ? FLAG_MASK_NEG_1K_VCOMP      : 0;
-    flags |= (digitalRead(FLAG_NEG_1K_ICOMP_PIN) == HIGH) ? FLAG_MASK_NEG_1K_ICOMP      : 0;
-    flags |= (digitalRead(FLAG_20K_VCOMP_PIN)    == HIGH) ? FLAG_MASK_20K_VCOMP         : 0;
-    flags |= (digitalRead(FLAG_20K_ICOMP_PIN)    == HIGH) ? FLAG_MASK_20K_ICOMP         : 0;
-    flags |= (digitalRead(FLAG_3K_VCOMP_PIN)     == HIGH) ? FLAG_MASK_3K_VCOMP          : 0;
-    flags |= (digitalRead(FLAG_3K_ICOMP_PIN)     == HIGH) ? FLAG_MASK_3K_ICOMP          : 0;
+    flags |= (digitalRead(FLAG_3KV_TIMER_PIN)    == HIGH) ? LATCHED_FLAG_MASK_3KV_TIMER       : 0;
+    flags |= (digitalRead(FLAG_ARMBEAMS_PIN)     == HIGH) ? LATCHED_FLAG_MASK_ARMBEAMS_SWITCH : 0;
+    flags |= (digitalRead(FLAG_CCSPOWER_PIN)     == HIGH) ? LATCHED_FLAG_MASK_CCSPOWER_ALLOW  : 0;
+    flags |= (digitalRead(FLAG_ARM80KV_PIN)      == HIGH) ? LATCHED_FLAG_MASK_ARM80KV_SWITCH  : 0;
+    flags |= (digitalRead(FLAG_1K_VCOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_1K_VCOMP        : 0;
+    flags |= (digitalRead(FLAG_1K_ICOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_1K_ICOMP        : 0;
+    flags |= (digitalRead(FLAG_NEG_1K_VCOMP_PIN) == HIGH) ? LATCHED_FLAG_MASK_NEG_1K_VCOMP    : 0;
+    flags |= (digitalRead(FLAG_NEG_1K_ICOMP_PIN) == HIGH) ? LATCHED_FLAG_MASK_NEG_1K_ICOMP    : 0;
+    flags |= (digitalRead(FLAG_20K_VCOMP_PIN)    == HIGH) ? LATCHED_FLAG_MASK_20K_VCOMP       : 0;
+    flags |= (digitalRead(FLAG_20K_ICOMP_PIN)    == HIGH) ? LATCHED_FLAG_MASK_20K_ICOMP       : 0;
+    flags |= (digitalRead(FLAG_3K_VCOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_3K_VCOMP        : 0;
+    flags |= (digitalRead(FLAG_3K_ICOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_3K_ICOMP        : 0;
 
     return flags;
+}
+
+static inline bool readLogicAliveSignal()
+{
+    bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
+    bool logicAlive = (logicAckEcho != prevLogicAckEcho);
+    prevLogicAckEcho = logicAckEcho;
+    return logicAlive;
+}
+
+// forward dec for Matsusada reset state helper, which is used in readUnlatchedSignalsWord()
+static inline bool checkMatsusadaResetState();
+
+static inline uint16_t readUnlatchedSignalsWord()
+{
+    uint16_t signals = 0;
+
+    signals |= readHVEnableSwitchSignal() ? UNLATCHED_SIGNAL_MASK_HVENABLE        : 0;
+
+    if (ps_id == 1 || ps_id == 2) {
+        // only for Matsusada, check the reset state
+        signals |= checkMatsusadaResetState() ? UNLATCHED_SIGNAL_MASK_RESET_STATE_1KV : 0;
+    }
+
+    if (ps_id == 4) {
+        signals |= (digitalRead(ARM_80KV_SWITCH_PIN)   == LOW)  ? UNLATCHED_SIGNAL_MASK_ARM80KV_ENABLE  : 0;
+        signals |= (digitalRead(OUTPUT_CCSPOWER_PIN)   == HIGH) ? UNLATCHED_SIGNAL_MASK_CCSPOWER_ENABLE : 0;
+        signals |= (digitalRead(OUTPUT_ARMBEAMS_PIN)   == HIGH) ? UNLATCHED_SIGNAL_MASK_ARMBEAMS_ENABLE : 0;
+        signals |= (digitalRead(OUTPUT_3KV_ENABLE_PIN) == HIGH) ? UNLATCHED_SIGNAL_MASK_3KV_ENABLE      : 0;
+        signals |= (digitalRead(FLAG_NOMOP_PIN)        == HIGH) ? UNLATCHED_SIGNAL_MASK_NOMOP           : 0;
+        signals |= readLogicAliveSignal()                       ? UNLATCHED_SIGNAL_MASK_LOGIC_ALIVE     : 0;
+    }
+
+    return signals;
 }
 
 /**
@@ -221,7 +259,11 @@ static inline uint16_t readFlagsWord()
  * Toggling HV Enable will NOT clear the reset state -- the user must short the reset pins by
  * hitting the physical matsusada momentary reset switch on the front of the knob box.
  */
-void checkMatsusadaResetState() {
+static inline bool checkMatsusadaResetState() {
+    if (ps_id != 1 && ps_id != 2) {
+        return false;
+    }
+
     bool hvEnabled = digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
     bool highSetV = programmedHV_V > 1.0;
 
@@ -230,15 +272,15 @@ void checkMatsusadaResetState() {
         measuredHV_V < RESET_ENTER_V && measuredI_mA < RESET_ENTER_I) {
         resetState1kV = true;
         digitalWrite(RESET_LED_PIN, HIGH);
-        modbus_regs[DINPUT_RESET_STATE_1KV_ADDR] = 1;
     }
 
     // on recover, we only wait for current OR voltage to be above treshold
     else if (resetState1kV && (hvEnabled && (measuredHV_V > RESET_EXIT_V || measuredI_mA > RESET_EXIT_I))) {
         resetState1kV = false;
         digitalWrite(RESET_LED_PIN, LOW);
-        modbus_regs[DINPUT_RESET_STATE_1KV_ADDR] = 0;
     }
+
+    return resetState1kV;
 }
 
 /**
@@ -302,47 +344,27 @@ bool read_value()
     thresholdHV_V = (vPot_V / 5.0) * ratedHV_V;
     thresholdI_mA = (iPot_V / 5.0) * ratedI_mA;
 
-    /*
-    Read HV Enable switch state and store in RS-485 discrete input.
-    */
-    if (ps_id == 3) {
-        // for +20kv Bertan, signal is active-high
-        modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH);
-    } else {
-        modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
-    }
-    
-    /*
-    Check Matsusada reset state.
-    */
-    if (ps_id == 1 || ps_id == 2) { checkMatsusadaResetState(); }
-
     /**
      *  3kV Bertan specific: 
      * 
-     *      read the live Nom Op flag, latched logic event flags, logic arduino outputs, and switch states.
+     *      read the live unlatched signals, latched logic event flags, logic arduino outputs, and switch states.
      *
      *      update the 3kV timer/reset-event counter from the latched D26 timer flag.
      */
     if (ps_id == 4) { // only for +3kV Bertan
 
-        // read switch state of arm 80kV
-        modbus_regs[DINPUT_ARM80KV_ADDR] = (digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
+        uint16_t flags = readLatchedFlagsWord();
+        modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = flags;
 
-        uint16_t flags = readFlagsWord();
-        modbus_regs[DINPUT_FLAGS_WORD_ADDR] = flags;
+        uint16_t unlatchedSignals = readUnlatchedSignalsWord();
+        modbus_regs[DINPUT_UNLATCHED_SIGNALS_ADDR] = unlatchedSignals;
 
-        // D25 is live; D26 is a latched timer-event flag.
-        bool nomop = (flags & FLAG_MASK_NOMOP) != 0;
-        bool timerEventLatched = (flags & FLAG_MASK_3KV_TIMER) != 0;
+        // D25 is live in the unlatched register; D26 is a latched timer-event flag.
+        bool nomop = (unlatchedSignals & UNLATCHED_SIGNAL_MASK_NOMOP) != 0;
+        bool timerEventLatched = (flags & LATCHED_FLAG_MASK_3KV_TIMER) != 0;
 
         // Update the 3kV timer/reset-event counter from D26.
         update3KVResetCounter(nomop, timerEventLatched);
-
-        // Look for Ack Back Edge from logic Arduino
-        bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
-        modbus_regs[DINPUT_LOGIC_ALIVE_ADDR] = (logicAckEcho != prevLogicAckEcho);
-        prevLogicAckEcho = logicAckEcho;
 
         // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
@@ -354,6 +376,9 @@ bool read_value()
             ack_state = false;
         }
 
+    } else {
+        modbus_regs[DINPUT_UNLATCHED_SIGNALS_ADDR] = readUnlatchedSignalsWord();
+        modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = 0;
     }
 
     return true;

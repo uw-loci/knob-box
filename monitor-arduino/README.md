@@ -193,8 +193,8 @@ The code clamps negative or over-range ADS1115 raw values before scaling and cla
 The current firmware exposes one contiguous register array:
 
 - `IREG_COUNT = 5`
-- `DINPUT_COUNT = 5`
-- `TOTAL_REG_COUNT = 10`
+- `DINPUT_COUNT = 2`
+- `TOTAL_REG_COUNT = 7`
 
 ### Common Input Registers
 
@@ -206,29 +206,30 @@ The current firmware exposes one contiguous register array:
 | `3` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
 | `4` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` timer/reset-event counter |
 
-### Common Boolean / State Registers
+### Packed DINPUT Registers
 
 | Address | Name | Meaning |
 |---------|------|---------|
-| `5` | `DINPUT_HVENABLE_ADDR` | HV enable switch state |
-| `6` | `DINPUT_RESET_STATE_1KV_ADDR` | Matsusada reset-state indication |
+| `5` | `DINPUT_UNLATCHED_SIGNALS_ADDR` | Packed unlatched signals word |
+| `6` | `DINPUT_LATCHED_FLAGS_ADDR` | Packed latched flags word |
 
-### `+3 kV`-Specific Registers
+`DINPUT_UNLATCHED_SIGNALS_ADDR` bit layout:
 
-| Address | Name | Meaning |
-|---------|------|---------|
-| `7` | `DINPUT_ARM80KV_ADDR` | Raw Arm 80 kV switch state |
-| `8` | `DINPUT_FLAGS_WORD_ADDR` | Packed `D22-D37` Logic Arduino flags word |
-| `9` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
+| Bit | Source | Meaning |
+|-----|--------|---------|
+| `0` | `D7` | HV enable switch state |
+| `1` | internal state | Matsusada reset-state indication (`ps_id = 1, 2`) |
+| `2` | `D8` | Arm 80 kV enable switch (`ps_id = 4`) |
+| `3` | `D22` | CCS Power Enable output signal (`ps_id = 4`) |
+| `4` | `D23` | Arm Beams Enable output signal (`ps_id = 4`) |
+| `5` | `D24` | `3 kV` HV Enable output signal (`ps_id = 4`) |
+| `6` | `D25` | Nom Op signal (`ps_id = 4`) |
+| `7` | derived from `D9` edge detect | Logic Arduino alive signal (`ps_id = 4`) |
 
-`DINPUT_FLAGS_WORD_ADDR` bit layout:
+`DINPUT_LATCHED_FLAGS_ADDR` bit layout:
 
 | Bit | Pin | Meaning |
 |-----|-----|---------|
-| `0` | `D22` | CCS Power Enable |
-| `1` | `D23` | Arm Beams Signal |
-| `2` | `D24` | 3 kV HV Enable Signal |
-| `3` | `D25` | Nom Op |
 | `4` | `D26` | 3 kV Timer State |
 | `5` | `D27` | Arm Beams Switch |
 | `6` | `D28` | CCS Power Allow Switch |
@@ -241,6 +242,8 @@ The current firmware exposes one contiguous register array:
 | `13` | `D35` | `20 kV` I Comparator |
 | `14` | `D36` | `3 kV` V Comparator |
 | `15` | `D37` | `3 kV` I Comparator |
+
+Bits `0-3` are currently unused and remain `0`.
 
 ---
 
@@ -262,7 +265,7 @@ It clears that state when the supply appears to recover:
 - Measured voltage rises above `1.0 V`, or
 - Measured current rises above `1.0 mA`
 
-The state is reported both on the Matsusada reset LED (`D6`) and in Modbus register `6`.
+The state is reported both on the Matsusada reset LED (`D6`) and in unlatched-signals bit `1`.
 
 ### `+20 kV` Bertan (`ps_id = 3`)
 
@@ -272,22 +275,21 @@ The `+20 kV` variant uses `kV` formatting on the LCD:
 - Measured voltage shown with `0.01 kV` formatting
 - Threshold voltage shown with `0.1 kV` formatting
 
-For `DINPUT_HVENABLE_ADDR`, the current code treats the `+20 kV` HV enable telemetry as active-high.
+For `DINPUT_UNLATCHED_SIGNALS_ADDR` bit `0`, the current code treats the `+20 kV` HV enable telemetry as active-high.
 
 ### `+3 kV` Bertan (`ps_id = 4`)
 
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
-- Reads Logic Arduino telemetry on `D22-D37`
-- Packs `D22-D37` into `DINPUT_FLAGS_WORD_ADDR` with bit `0 = D22` through bit `15 = D37`
-- Reads raw Arm 80 kV switch state on `D8`
-- Reads the raw `3 kV Enable` switch request on `D7`
-- Reads Logic Arduino ack-back on `D9`
+- Packs the unlatched signals on `D8`, `D22-D25`, and the logic-alive edge detect into `DINPUT_UNLATCHED_SIGNALS_ADDR`
+- Packs the latched flags on `D26-D37` into `DINPUT_LATCHED_FLAGS_ADDR`, keeping `D26 -> bit 4` through `D37 -> bit 15`
+- Reports the raw `3 kV Enable` switch request on `D7` through unlatched-signals bit `0`
+- Reads Logic Arduino ack-back on `D9` and maps the existing edge-detect behavior to unlatched-signals bit `7`
 - Toggles the flags acknowledge line on `D14`
 
 The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs on `D11` and `D12`, but the published Modbus map currently exposes the Logic Arduino output-state lines on `D22` and `D23` for those functions.
 
-The dedicated `3kV_HVEnable_Flag` Modbus register has been removed. The raw `3 kV Enable` switch request on `D7` is now reported only through the common HV-enable register at address `5`.
+The dedicated `3kV_HVEnable_Flag` Modbus register has been removed. The raw `3 kV Enable` switch request on `D7` is now reported only through unlatched-signals bit `0`.
 
 It also tracks a `3 kV` timer/reset-event counter in Modbus register `4`.
 
