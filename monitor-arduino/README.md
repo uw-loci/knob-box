@@ -193,8 +193,8 @@ The code clamps negative or over-range ADS1115 raw values before scaling and cla
 The current firmware exposes one contiguous register array:
 
 - `IREG_COUNT = 5`
-- `DINPUT_COUNT = 19`
-- `TOTAL_REG_COUNT = 24`
+- `DINPUT_COUNT = 5`
+- `TOTAL_REG_COUNT = 10`
 
 ### Common Input Registers
 
@@ -218,22 +218,29 @@ The current firmware exposes one contiguous register array:
 | Address | Name | Meaning |
 |---------|------|---------|
 | `7` | `DINPUT_ARM80KV_ADDR` | Raw Arm 80 kV switch state |
-| `8` | `DINPUT_ARMBEAMS_ADDR` | Logic Arduino Arm Beams output state |
-| `9` | `DINPUT_CCSPOWER_ADDR` | Logic Arduino CCS Power output state |
-| `10` | `DINPUT_3KV_ENABLE_ADDR` | Logic Arduino 3 kV enable output state |
-| `11` | `DINPUT_NOMOP_FLAG_ADDR` | Logic Arduino Nom Op flag |
-| `12` | `DINPUT_ARMBEAMS_FLAG_ADDR` | Arm Beams-related flag |
-| `13` | `DINPUT_CCSPOWER_FLAG_ADDR` | CCS Power-related flag |
-| `14` | `DINPUT_ARM80KV_FLAG_ADDR` | Arm 80 kV-related flag |
-| `15` | `DINPUT_1K_VCOMP_FLAG_ADDR` | `+1 kV` undervoltage flag |
-| `16` | `DINPUT_1K_ICOMP_FLAG_ADDR` | `+1 kV` overcurrent flag |
-| `17` | `DINPUT_NEG_1K_VCOMP_FLAG_ADDR` | `-1 kV` undervoltage flag |
-| `18` | `DINPUT_NEG_1K_ICOMP_FLAG_ADDR` | `-1 kV` overcurrent flag |
-| `19` | `DINPUT_20K_VCOMP_FLAG_ADDR` | `+20 kV` undervoltage flag |
-| `20` | `DINPUT_20K_ICOMP_FLAG_ADDR` | `+20 kV` overcurrent flag |
-| `21` | `DINPUT_3K_VCOMP_FLAG_ADDR` | `+3 kV` undervoltage flag |
-| `22` | `DINPUT_3K_ICOMP_FLAG_ADDR` | `+3 kV` overcurrent flag |
-| `23` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
+| `8` | `DINPUT_FLAGS_WORD_ADDR` | Packed `D22-D37` Logic Arduino flags word |
+| `9` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
+
+`DINPUT_FLAGS_WORD_ADDR` bit layout:
+
+| Bit | Pin | Meaning |
+|-----|-----|---------|
+| `0` | `D22` | CCS Power Enable |
+| `1` | `D23` | Arm Beams Signal |
+| `2` | `D24` | 3 kV HV Enable Signal |
+| `3` | `D25` | Nom Op |
+| `4` | `D26` | 3 kV Timer State |
+| `5` | `D27` | Arm Beams Switch |
+| `6` | `D28` | CCS Power Allow Switch |
+| `7` | `D29` | Arm 80 kV Switch |
+| `8` | `D30` | `+1 kV` V Comparator |
+| `9` | `D31` | `+1 kV` I Comparator |
+| `10` | `D32` | `-1 kV` V Comparator |
+| `11` | `D33` | `-1 kV` I Comparator |
+| `12` | `D34` | `20 kV` V Comparator |
+| `13` | `D35` | `20 kV` I Comparator |
+| `14` | `D36` | `3 kV` V Comparator |
+| `15` | `D37` | `3 kV` I Comparator |
 
 ---
 
@@ -271,9 +278,8 @@ For `DINPUT_HVENABLE_ADDR`, the current code treats the `+20 kV` HV enable telem
 
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
-- Reads Logic Arduino output-state lines on `D22-D24`
-- Reads the live `Nom Op` flag on `D25`
-- Reads latched logic-history flags on `D26-D37`
+- Reads Logic Arduino telemetry on `D22-D37`
+- Packs `D22-D37` into `DINPUT_FLAGS_WORD_ADDR` with bit `0 = D22` through bit `15 = D37`
 - Reads raw Arm 80 kV switch state on `D8`
 - Reads the raw `3 kV Enable` switch request on `D7`
 - Reads Logic Arduino ack-back on `D9`

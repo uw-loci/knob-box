@@ -43,7 +43,8 @@ Input Registers (Function Code 04)
 
 /*
 "Discrete Inputs" (really also input registers)
-TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
+The Logic Arduino flags on D22-D37 are packed into one 16-bit register.
+Other boolean/state registers remain unpacked for now.
 */
 #define DINPUT_HVENABLE_ADDR            5
 // Just for matsusadas
@@ -52,28 +53,13 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 
 // (raw switch states)
 #define DINPUT_ARM80KV_ADDR             7
-// (logic arduino outputs)
-#define DINPUT_ARMBEAMS_ADDR            8
-#define DINPUT_CCSPOWER_ADDR            9
-#define DINPUT_3KV_ENABLE_ADDR          10 
-// (flags)
-#define DINPUT_NOMOP_FLAG_ADDR          11
-#define DINPUT_ARMBEAMS_FLAG_ADDR       12
-#define DINPUT_CCSPOWER_FLAG_ADDR       13
-#define DINPUT_ARM80KV_FLAG_ADDR        14
-#define DINPUT_1K_VCOMP_FLAG_ADDR       15
-#define DINPUT_1K_ICOMP_FLAG_ADDR       16
-#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   17
-#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   18
-#define DINPUT_20K_VCOMP_FLAG_ADDR      19
-#define DINPUT_20K_ICOMP_FLAG_ADDR      20
-#define DINPUT_3K_VCOMP_FLAG_ADDR       21
-#define DINPUT_3K_ICOMP_FLAG_ADDR       22
-#define DINPUT_LOGIC_ALIVE_ADDR         23   // 1 when Logic Arduino responded to the previous ACK cycle
+// Packed D22-D37 flags word. Bit 0 = D22, ..., bit 15 = D37.
+#define DINPUT_FLAGS_WORD_ADDR          8
+#define DINPUT_LOGIC_ALIVE_ADDR         9   // 1 when Logic Arduino responded to the previous ACK cycle
 
 // note: when changing this map, update these register counts:
 #define IREG_COUNT              5
-#define DINPUT_COUNT            19
+#define DINPUT_COUNT            5
 #define TOTAL_REG_COUNT         (IREG_COUNT + DINPUT_COUNT)
 //============================================================
 //============================================================
@@ -101,6 +87,7 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define RS485_DIR_PIN                   17      // low = receive mode
 #define FLAGS_ACK_PIN                   14      // ack pin to Logic Arduino
 #define LOGIC_ACK_ECHO_PIN              9       // ACK-back from Logic Arduino (toggles when Logic observes ACK edge)
+
 // (logic arduino outputs)
 #define OUTPUT_CCSPOWER_PIN             22
 #define OUTPUT_ARMBEAMS_PIN             23
@@ -119,6 +106,23 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define FLAG_20K_ICOMP_PIN              35
 #define FLAG_3K_VCOMP_PIN               36
 #define FLAG_3K_ICOMP_PIN               37
+
+const uint16_t FLAG_MASK_CCSPOWER_ENABLE   = ((uint16_t)1 <<  0);  // D22
+const uint16_t FLAG_MASK_ARMBEAMS_SIGNAL   = ((uint16_t)1 <<  1);  // D23
+const uint16_t FLAG_MASK_3KV_ENABLE_SIGNAL = ((uint16_t)1 <<  2);  // D24
+const uint16_t FLAG_MASK_NOMOP             = ((uint16_t)1 <<  3);  // D25
+const uint16_t FLAG_MASK_3KV_TIMER         = ((uint16_t)1 <<  4);  // D26
+const uint16_t FLAG_MASK_ARMBEAMS_SWITCH   = ((uint16_t)1 <<  5);  // D27
+const uint16_t FLAG_MASK_CCSPOWER_ALLOW    = ((uint16_t)1 <<  6);  // D28
+const uint16_t FLAG_MASK_ARM80KV_SWITCH    = ((uint16_t)1 <<  7);  // D29
+const uint16_t FLAG_MASK_1K_VCOMP          = ((uint16_t)1 <<  8);  // D30
+const uint16_t FLAG_MASK_1K_ICOMP          = ((uint16_t)1 <<  9);  // D31
+const uint16_t FLAG_MASK_NEG_1K_VCOMP      = ((uint16_t)1 << 10);  // D32
+const uint16_t FLAG_MASK_NEG_1K_ICOMP      = ((uint16_t)1 << 11);  // D33
+const uint16_t FLAG_MASK_20K_VCOMP         = ((uint16_t)1 << 12);  // D34
+const uint16_t FLAG_MASK_20K_ICOMP         = ((uint16_t)1 << 13);  // D35
+const uint16_t FLAG_MASK_3K_VCOMP          = ((uint16_t)1 << 14);  // D36
+const uint16_t FLAG_MASK_3K_ICOMP          = ((uint16_t)1 << 15);  // D37
 
 /**
  * Other declarations and initializations
@@ -176,6 +180,30 @@ static inline int16_t clamp_i16_positive(float x)
     if (x < 0.0f) return 0;
     if (x > 32760.0f) return 32767;
     else return (int16_t)x;
+}
+
+static inline uint16_t readFlagsWord()
+{
+    uint16_t flags = 0;
+
+    flags |= (digitalRead(OUTPUT_CCSPOWER_PIN)   == HIGH) ? FLAG_MASK_CCSPOWER_ENABLE   : 0;
+    flags |= (digitalRead(OUTPUT_ARMBEAMS_PIN)   == HIGH) ? FLAG_MASK_ARMBEAMS_SIGNAL   : 0;
+    flags |= (digitalRead(OUTPUT_3KV_ENABLE_PIN) == HIGH) ? FLAG_MASK_3KV_ENABLE_SIGNAL : 0;
+    flags |= (digitalRead(FLAG_NOMOP_PIN)        == HIGH) ? FLAG_MASK_NOMOP             : 0;
+    flags |= (digitalRead(FLAG_3KV_TIMER_PIN)    == HIGH) ? FLAG_MASK_3KV_TIMER         : 0;
+    flags |= (digitalRead(FLAG_ARMBEAMS_PIN)     == HIGH) ? FLAG_MASK_ARMBEAMS_SWITCH   : 0;
+    flags |= (digitalRead(FLAG_CCSPOWER_PIN)     == HIGH) ? FLAG_MASK_CCSPOWER_ALLOW    : 0;
+    flags |= (digitalRead(FLAG_ARM80KV_PIN)      == HIGH) ? FLAG_MASK_ARM80KV_SWITCH    : 0;
+    flags |= (digitalRead(FLAG_1K_VCOMP_PIN)     == HIGH) ? FLAG_MASK_1K_VCOMP          : 0;
+    flags |= (digitalRead(FLAG_1K_ICOMP_PIN)     == HIGH) ? FLAG_MASK_1K_ICOMP          : 0;
+    flags |= (digitalRead(FLAG_NEG_1K_VCOMP_PIN) == HIGH) ? FLAG_MASK_NEG_1K_VCOMP      : 0;
+    flags |= (digitalRead(FLAG_NEG_1K_ICOMP_PIN) == HIGH) ? FLAG_MASK_NEG_1K_ICOMP      : 0;
+    flags |= (digitalRead(FLAG_20K_VCOMP_PIN)    == HIGH) ? FLAG_MASK_20K_VCOMP         : 0;
+    flags |= (digitalRead(FLAG_20K_ICOMP_PIN)    == HIGH) ? FLAG_MASK_20K_ICOMP         : 0;
+    flags |= (digitalRead(FLAG_3K_VCOMP_PIN)     == HIGH) ? FLAG_MASK_3K_VCOMP          : 0;
+    flags |= (digitalRead(FLAG_3K_ICOMP_PIN)     == HIGH) ? FLAG_MASK_3K_ICOMP          : 0;
+
+    return flags;
 }
 
 /**
@@ -301,32 +329,15 @@ bool read_value()
         // read switch state of arm 80kV
         modbus_regs[DINPUT_ARM80KV_ADDR] = (digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
 
-        // read logic arduino outputs
-        modbus_regs[DINPUT_ARMBEAMS_ADDR] = digitalRead(OUTPUT_ARMBEAMS_PIN);
-        modbus_regs[DINPUT_CCSPOWER_ADDR] = digitalRead(OUTPUT_CCSPOWER_PIN) ;
-        modbus_regs[DINPUT_3KV_ENABLE_ADDR] = digitalRead(OUTPUT_3KV_ENABLE_PIN);
+        uint16_t flags = readFlagsWord();
+        modbus_regs[DINPUT_FLAGS_WORD_ADDR] = flags;
 
         // D25 is live; D26 is a latched timer-event flag.
-        bool nomop = digitalRead(FLAG_NOMOP_PIN);
-        bool timerEventLatched = digitalRead(FLAG_3KV_TIMER_PIN);
+        bool nomop = (flags & FLAG_MASK_NOMOP) != 0;
+        bool timerEventLatched = (flags & FLAG_MASK_3KV_TIMER) != 0;
 
         // Update the 3kV timer/reset-event counter from D26.
         update3KVResetCounter(nomop, timerEventLatched);
-
-        modbus_regs[DINPUT_NOMOP_FLAG_ADDR] = nomop;
-
-        // other flags --> likely just for logging purposes on dashboard
-        modbus_regs[DINPUT_ARMBEAMS_FLAG_ADDR] = digitalRead(FLAG_ARMBEAMS_PIN);
-        modbus_regs[DINPUT_CCSPOWER_FLAG_ADDR] = digitalRead(FLAG_CCSPOWER_PIN);
-        modbus_regs[DINPUT_ARM80KV_FLAG_ADDR] = digitalRead(FLAG_ARM80KV_PIN);
-        modbus_regs[DINPUT_1K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_1K_VCOMP_PIN);
-        modbus_regs[DINPUT_1K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_1K_ICOMP_PIN);
-        modbus_regs[DINPUT_NEG_1K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_NEG_1K_VCOMP_PIN);
-        modbus_regs[DINPUT_NEG_1K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_NEG_1K_ICOMP_PIN);
-        modbus_regs[DINPUT_20K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_20K_VCOMP_PIN);
-        modbus_regs[DINPUT_20K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_20K_ICOMP_PIN);
-        modbus_regs[DINPUT_3K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_3K_VCOMP_PIN);
-        modbus_regs[DINPUT_3K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_3K_ICOMP_PIN);
 
         // Look for Ack Back Edge from logic Arduino
         bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
