@@ -36,6 +36,7 @@
 #error "Invalid SELECTED_PS_ID. Use PS_POS1KV, PS_NEG1KV, PS_20KV, or PS_3KV."
 #endif
 
+// Do Not Edit, edit #define SELECTED_PS_ID above instead
 const uint8_t ps_id = SELECTED_PS_ID;
 
 // Capture reset cause and stop any inherited watchdog before normal startup runs.
