@@ -144,9 +144,8 @@ void loop()
 
   int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
 
-  if (ps_id == 4 && pollResult > 4) {
-    latchedFlags = 0;
-    modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = 0;
+  if (ps_id == PS_3KV && pollResult > 4) {
+    clearPending = true;
   }
 
   timer.tick();
@@ -210,39 +209,38 @@ The code clamps negative or over-range ADS1115 raw values before scaling and cla
 
 The current firmware exposes one contiguous register array:
 
-- `IREG_COUNT = 5`
+- `IREG_COUNT = 4`
 - `DINPUT_COUNT = 2`
-- `TOTAL_REG_COUNT = 7`
+- `TOTAL_REG_COUNT = 6`
 
 ### Common Input Registers
 
 | Address | Name | Meaning |
 |---------|------|---------|
-| `0` | `IREG_HEALTH_ADDR` | Reserved, currently unused / TODO |
-| `1` | `IREG_V_SET_ADDR` | Programmed HV, rounded to integer volts |
-| `2` | `IREG_V_READ_ADDR` | Measured HV, rounded to integer volts |
-| `3` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
-| `4` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` timer/reset-event counter |
+| `0` | `IREG_V_SET_ADDR` | Programmed HV, rounded to integer volts |
+| `1` | `IREG_V_READ_ADDR` | Measured HV, rounded to integer volts |
+| `2` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
+| `3` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` timer/reset-event counter |
 
 ### Packed DINPUT Registers
 
 | Address | Name | Meaning |
 |---------|------|---------|
-| `5` | `DINPUT_UNLATCHED_SIGNALS_ADDR` | Packed unlatched signals word |
-| `6` | `DINPUT_LATCHED_FLAGS_ADDR` | Packed monitor-latched flags word |
+| `4` | `DINPUT_UNLATCHED_SIGNALS_ADDR` | Packed unlatched signals word |
+| `5` | `DINPUT_LATCHED_FLAGS_ADDR` | Packed monitor-latched flags word |
 
 `DINPUT_UNLATCHED_SIGNALS_ADDR` bit layout:
 
 | Bit | Name | Source | Meaning |
 |-----|------|--------|---------|
 | `0` | `HV Enable` | `D7` | HV enable switch state |
-| `1` | `Reset State 1kV` | internal state | Matsusada reset-state indication (`ps_id = 1, 2`) |
-| `2` | `Arm 80kV Enable` | `D8` | Arm 80 kV enable switch (`ps_id = 4`) |
-| `3` | `CCS Power Enable` | `D22` | CCS Power Enable output signal (`ps_id = 4`) |
-| `4` | `Arm Beams Enable` | `D23` | Arm Beams Enable output signal (`ps_id = 4`) |
-| `5` | `3kV HV Enable` | `D24` | `3 kV` HV Enable output signal (`ps_id = 4`) |
-| `6` | `Nom Op` | `D25` | Nom Op signal (`ps_id = 4`) |
-| `7` | `Logic Alive` | derived from `D9` edge detect | Logic Arduino alive signal (`ps_id = 4`) |
+| `1` | `Reset State 1kV` | internal state | Matsusada reset-state indication (`ps_id = PS_POS1KV` or `PS_NEG1KV`) |
+| `2` | `Arm 80kV Enable` | `D8` | Arm 80 kV enable switch (`ps_id = PS_3KV`) |
+| `3` | `CCS Power Enable` | `D22` | CCS Power Enable output signal (`ps_id = PS_3KV`) |
+| `4` | `Arm Beams Enable` | `D23` | Arm Beams Enable output signal (`ps_id = PS_3KV`) |
+| `5` | `3kV HV Enable` | `D24` | `3 kV` HV Enable output signal (`ps_id = PS_3KV`) |
+| `6` | `Nom Op` | `D25` | Nom Op signal (`ps_id = PS_3KV`) |
+| `7` | `Logic Alive` | derived from `D9` edge detect | Logic Arduino alive signal (`ps_id = PS_3KV`) |
 
 `DINPUT_LATCHED_FLAGS_ADDR` bit layout:
 
@@ -263,19 +261,19 @@ The current firmware exposes one contiguous register array:
 
 Bits `0-3` are currently unused and remain `0`.
 
-For `ps_id = 4`, the monitor samples the raw Logic Arduino latch pins on each `read_value()` cycle, ORs those bits into its own sticky `latchedFlags` word, and publishes that word in register `6`. After the dashboard request is answered successfully, the monitor clears that sticky word so the next request reports only newly sampled events.
+For `ps_id = PS_3KV`, the monitor samples the raw Logic Arduino latch pins on each `read_value()` cycle, ORs those bits into its own sticky `latchedFlags` word, and publishes that word in register `5`. After the dashboard request is answered successfully, the monitor clears that sticky word so the next request reports only newly sampled events.
 
 Per-supply use of the packed DINPUT registers:
 
-- `ps_id = 1, 2`: unlatched bits `0-1` are used; latched word remains `0`
-- `ps_id = 3`: unlatched bit `0` is used; latched word remains `0`
-- `ps_id = 4`: unlatched bits `0`, `2-7` are used; latched bits `4-15` are used
+- `ps_id = PS_POS1KV` or `PS_NEG1KV`: unlatched bits `0-1` are used; latched word remains `0`
+- `ps_id = PS_20KV`: unlatched bit `0` is used; latched word remains `0`
+- `ps_id = PS_3KV`: unlatched bits `0`, `2-7` are used; latched bits `4-15` are used
 
 ---
 
 ## Supply-Specific Firmware Behavior
 
-### Matsusada Variants (`ps_id = 1, 2`)
+### Matsusada Variants (`ps_id = PS_POS1KV` or `PS_NEG1KV`)
 
 The Matsusada variants drive unlatched-signals bit `1` through `checkMatsusadaResetState()`.
 
@@ -293,7 +291,7 @@ It clears that state when the supply appears to recover:
 
 The state is reported both on the Matsusada reset LED (`D6`) and in unlatched-signals bit `1`.
 
-### `+20 kV` Bertan (`ps_id = 3`)
+### `+20 kV` Bertan (`ps_id = PS_20KV`)
 
 The `+20 kV` variant uses `kV` formatting on the LCD:
 
@@ -303,7 +301,7 @@ The `+20 kV` variant uses `kV` formatting on the LCD:
 
 For `DINPUT_UNLATCHED_SIGNALS_ADDR` bit `0`, the current code treats the `+20 kV` HV enable telemetry as active-high.
 
-### `+3 kV` Bertan (`ps_id = 4`)
+### `+3 kV` Bertan (`ps_id = PS_3KV`)
 
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
@@ -318,7 +316,7 @@ The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs 
 
 The dedicated `3kV_HVEnable_Flag` Modbus register has been removed. The raw `3 kV Enable` switch request on `D7` is now reported only through unlatched-signals bit `0`.
 
-It also tracks a `3 kV` timer/reset-event counter in Modbus register `4`.
+It also tracks a `3 kV` timer/reset-event counter in Modbus register `3`.
 
 Current implementation detail: the counter increments when:
 

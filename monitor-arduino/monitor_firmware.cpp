@@ -55,23 +55,22 @@ void watchdog_early_init(void) {
 /*
 Input Registers (Function Code 04)
 */
-#define IREG_HEALTH_ADDR            0   // TODO track health/error mode
-#define IREG_V_SET_ADDR             1   // integer volts
-#define IREG_V_READ_ADDR            2   // integer volts
-#define IREG_I_READ_ADDR            3   // integer microamps
-#define IREG_3KV_RESET_COUNT_ADDR   4   // count of reset events for 3kV Bertan
+#define IREG_V_SET_ADDR             0   // integer volts
+#define IREG_V_READ_ADDR            1   // integer volts
+#define IREG_I_READ_ADDR            2   // integer microamps
+#define IREG_3KV_RESET_COUNT_ADDR   3   // count of reset events for 3kV Bertan
 
 /*
 "Discrete Inputs" (really also input registers)
 The monitor exposes two packed DINPUT registers:
-    5 = unlatched signals
-    6 = latched flags
+    4 = unlatched signals
+    5 = latched flags
 */
-#define DINPUT_UNLATCHED_SIGNALS_ADDR   5
-#define DINPUT_LATCHED_FLAGS_ADDR       6
+#define DINPUT_UNLATCHED_SIGNALS_ADDR   4
+#define DINPUT_LATCHED_FLAGS_ADDR       5
 
 // note: when changing this map, update these register counts:
-#define IREG_COUNT              5
+#define IREG_COUNT              4
 #define DINPUT_COUNT            2
 #define TOTAL_REG_COUNT         (IREG_COUNT + DINPUT_COUNT)
 //============================================================
@@ -647,7 +646,7 @@ void loop()
 
   int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
 
-  // The dashboard currently reads the full 0-6 block in one request.
+  // The dashboard currently reads the full 0-5 block in one request.
   // A successful reply schedules a clear, but the clear itself is applied on the
   // next 150 ms read_value() boundary so sampling and second-tier latch rollover
   // stay aligned.
