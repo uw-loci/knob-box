@@ -145,7 +145,6 @@ char                thresholdHV_buf[10];            // ""
 char                measuredI_buf[10];              // ""
 char                thresholdI_buf[10];             // ""
 bool                prevNomOpState = false;         // previous D25 state, used to clear the 3kV timer-event count on Nom Op entry
-bool                prev3kVTimerLatchState = false; // previous sampled D26 latch state, used to detect new timer events
 int                 resetState3kV = 0;              // count of latched 3kV timer events since the last Nom Op entry
 uint16_t            latchedFlags = 0;               // sticky Modbus copy of D26-D37 until the next successful reply
 bool                clearPending = false;           // defer sticky-flag clear until the next 150 ms sampling boundary
@@ -289,21 +288,21 @@ static inline bool checkMatsusadaResetState() {
 /**
  * Helper to maintain the +3kV timer/reset-event counter.
  *
- * The +3kV monitor counts new timer events on rising edges of that latched flag and clears 
- * the count whenever Nom Op rises, which indicates the system has re-entered normal operation.
+ * The Logic Arduino raises D26 when it enters the 3kV timer state and holds that event flag
+ * until the next ACK edge. The +3kV monitor therefore counts any sampled-high D26 event flag
+ * and clears the count whenever Nom Op rises
  */
 void update3KVResetCounter(bool nomop, bool timerEventLatched) {
     if (!prevNomOpState && nomop) {
         // Clear the accumulated timer-event count when Nom Op is re-entered.
         resetState3kV = 0;
-    } else if (!prev3kVTimerLatchState && timerEventLatched) {
-        // Count each timer event once, on the D26 latch rising edge only.
+    } else if (timerEventLatched) {
+        // Count each sampled D26 timer-event flag once per 150 ms monitor read/ACK cycle.
         resetState3kV++;
     }
 
     modbus_regs[IREG_3KV_RESET_COUNT_ADDR] = resetState3kV;
     prevNomOpState = nomop;
-    prev3kVTimerLatchState = timerEventLatched;
 }
 
 /**
@@ -373,7 +372,7 @@ bool read_value()
         bool nomop = (unlatchedSignals & UNLATCHED_SIGNAL_MASK_NOMOP) != 0;
         bool timerEventLatched = (flags & LATCHED_FLAG_MASK_3KV_TIMER) != 0;
 
-        // Update the 3kV timer/reset-event counter from the raw D26 latch input.
+        // Update the 3kV timer/reset-event counter from the sampled D26 event flag.
         update3KVResetCounter(nomop, timerEventLatched);
 
         // ack flag read so logic arduino can reset and continue
@@ -591,7 +590,6 @@ void setup()
             pinMode(LOGIC_ACK_ECHO_PIN, INPUT_PULLUP);
             prevLogicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN); // initialize D9 edge detection
             prevNomOpState = digitalRead(FLAG_NOMOP_PIN);
-            prev3kVTimerLatchState = digitalRead(FLAG_3KV_TIMER_PIN);
             // switches only monitored by +3kV
             pinMode(ARM_BEAMS_SWITCH_PIN, INPUT_PULLUP);
             pinMode(CCS_POWER_ALLOW_SWITCH_PIN, INPUT_PULLUP);
