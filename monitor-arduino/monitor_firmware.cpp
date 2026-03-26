@@ -148,6 +148,7 @@ bool                prevNomOpState = false;         // previous D25 state, used 
 bool                prev3kVTimerLatchState = false; // previous sampled D26 latch state, used to detect new timer events
 int                 resetState3kV = 0;              // count of latched 3kV timer events since the last Nom Op entry
 uint16_t            latchedFlags = 0;               // sticky Modbus copy of D26-D37 until the next successful reply
+bool                clearPending = false;           // defer sticky-flag clear until the next 150 ms sampling boundary
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
@@ -356,6 +357,12 @@ bool read_value()
     if (ps_id == 4) { // only for +3kV Bertan
 
         uint16_t flags = readFlagsWord();
+
+        if (clearPending) {
+            latchedFlags = 0;
+            clearPending = false;
+        }
+
         latchedFlags |= flags;
         modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = latchedFlags;
 
@@ -613,10 +620,11 @@ void loop()
   int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
 
   // The dashboard currently reads the full 0-6 block in one request.
-  // Clear the monitor-side sticky flag copy only after that reply has been sent.
+  // A successful reply schedules a clear, but the clear itself is applied on the
+  // next 150 ms read_value() boundary so sampling and second-tier latch rollover
+  // stay aligned.
   if (ps_id == 4 && pollResult > 4) {
-    latchedFlags = 0;
-    modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = 0;
+    clearPending = true;
   }
 
   timer.tick();
