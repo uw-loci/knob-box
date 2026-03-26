@@ -544,8 +544,6 @@ static void failStartupAndTripWatchdog(const char *message)
 
 void setup()
 {
-    // Keep startup under watchdog supervision so init failures cannot stall forever.
-    wdt_enable(WDTO_8S);
 
     Serial.begin(9600);
     Serial.println("High Voltage Power Supply Monitoring with ADS1115");
@@ -638,6 +636,8 @@ void setup()
     timer.every(150, read_value);
     timer.every(200, display_value);
     timer.every(1000UL*60UL*30UL, clear_display); // every 30 minutes
+
+    wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 
 }
 
