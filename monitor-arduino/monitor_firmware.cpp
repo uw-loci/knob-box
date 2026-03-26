@@ -531,8 +531,21 @@ bool clear_display() {
     return true;
 }
 
+static void failStartupAndTripWatchdog(const char *message)
+{
+    Serial.println(message);
+    Serial.flush();
+    wdt_enable(WDTO_1S);
+
+    while (true) {
+        // Intentionally stop here so the watchdog forces a reset.
+    }
+}
+
 void setup()
 {
+    // Keep startup under watchdog supervision so init failures cannot stall forever.
+    wdt_enable(WDTO_8S);
 
     Serial.begin(9600);
     Serial.println("High Voltage Power Supply Monitoring with ADS1115");
@@ -540,8 +553,7 @@ void setup()
     // Initialize the ADS1115 and I2C bus
     Wire.begin();
     if (!ads.begin()) {
-        Serial.println("Failed to initialize ADS.");
-        // while (1);
+        failStartupAndTripWatchdog("Failed to initialize ADS.");
     }
     ads.setDataRate(RATE_ADS1115_860SPS);
     ads.setGain(GAIN_TWOTHIRDS); // deafult, but want to be sure
@@ -626,8 +638,6 @@ void setup()
     timer.every(150, read_value);
     timer.every(200, display_value);
     timer.every(1000UL*60UL*30UL, clear_display); // every 30 minutes
-
-    wdt_enable(WDTO_8S); // Enable watchdog with 8s timeout
 
 }
 
