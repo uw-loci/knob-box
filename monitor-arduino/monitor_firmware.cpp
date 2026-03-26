@@ -1,6 +1,6 @@
 /**
  * High-Voltage Power Supply Monitoring Firmware.
- * Please set the power supply identifier before using.
+ * Please set SELECTED_PS_ID before compiling.
  */
 
 #include <arduino-timer.h>
@@ -12,12 +12,31 @@
 
 /**
  * POWER SUPPLY IDENTIFIER
- *      - 1: +1kV Matsusada
- *      - 2: -1kV Matsusada
- *      - 3: +20kV Bertan
- *      - 4: +3kV Bertan
+ * Edit SELECTED_PS_ID only. Do not enter raw numbers here.
+ *      - PS_POS1KV: +1kV Matsusada
+ *      - PS_NEG1KV: -1kV Matsusada
+ *      - PS_20KV: +20kV Bertan
+ *      - PS_3KV: +3kV Bertan
  */
-const int ps_id = 1;
+#define PS_POS1KV 1
+#define PS_NEG1KV 2
+#define PS_20KV 3
+#define PS_3KV 4
+
+/////////////////////////////////////////////////
+//////    EDIT BELOW TO SET POWER SUPPLY   //////
+/////////////////////////////////////////////////
+
+#define SELECTED_PS_ID PS_POS1KV
+
+/////////////////////////////////////////////////
+
+#if SELECTED_PS_ID != PS_POS1KV && SELECTED_PS_ID != PS_NEG1KV && \
+    SELECTED_PS_ID != PS_20KV && SELECTED_PS_ID != PS_3KV
+#error "Invalid SELECTED_PS_ID. Use PS_POS1KV, PS_NEG1KV, PS_20KV, or PS_3KV."
+#endif
+
+const uint8_t ps_id = SELECTED_PS_ID;
 
 // Capture reset cause and stop any inherited watchdog before normal startup runs.
 // This follows the standard avr-libc early-startup watchdog pattern.
@@ -184,7 +203,7 @@ static inline int16_t clamp_i16_positive(float x)
 
 static inline bool readHVEnableSwitchSignal()
 {
-    if (ps_id == 3) {
+    if (ps_id == PS_20KV) {
         // for +20kV Bertan, signal is active-high
         return digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH;
     }
@@ -229,12 +248,12 @@ static inline uint16_t readUnlatchedSignalsWord()
 
     signals |= readHVEnableSwitchSignal() ? UNLATCHED_SIGNAL_MASK_HVENABLE        : 0;
 
-    if (ps_id == 1 || ps_id == 2) {
+    if (ps_id == PS_POS1KV || ps_id == PS_NEG1KV) {
         // only for Matsusada, check the reset state
         signals |= checkMatsusadaResetState() ? UNLATCHED_SIGNAL_MASK_RESET_STATE_1KV : 0;
     }
 
-    if (ps_id == 4) {
+    if (ps_id == PS_3KV) {
         signals |= (digitalRead(ARM_80KV_SWITCH_PIN)   == LOW)  ? UNLATCHED_SIGNAL_MASK_ARM80KV_ENABLE  : 0;
         signals |= (digitalRead(OUTPUT_CCSPOWER_PIN)   == HIGH) ? UNLATCHED_SIGNAL_MASK_CCSPOWER_ENABLE : 0;
         signals |= (digitalRead(OUTPUT_ARMBEAMS_PIN)   == HIGH) ? UNLATCHED_SIGNAL_MASK_ARMBEAMS_ENABLE : 0;
@@ -262,7 +281,7 @@ static inline uint16_t readUnlatchedSignalsWord()
  * hitting the physical matsusada momentary reset switch on the front of the knob box.
  */
 static inline bool checkMatsusadaResetState() {
-    if (ps_id != 1 && ps_id != 2) {
+    if (ps_id != PS_POS1KV && ps_id != PS_NEG1KV) {
         return false;
     }
 
@@ -353,7 +372,7 @@ bool read_value()
      *
      *      update the 3kV timer/reset-event counter from the latched D26 timer flag.
      */
-    if (ps_id == 4) { // only for +3kV Bertan
+    if (ps_id == PS_3KV) { // only for +3kV Bertan
 
         uint16_t flags = readFlagsWord();
 
@@ -402,7 +421,7 @@ bool display_value()
     dtostrf(thresholdI_mA, 3, 1, thresholdI_buf);
 
     switch(ps_id) {
-        case 1: // +1kV Matsusada
+        case PS_POS1KV: // +1kV Matsusada
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -427,7 +446,7 @@ bool display_value()
 
             break;
         
-        case 2: // -1kV Matsusada
+        case PS_NEG1KV: // -1kV Matsusada
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -452,7 +471,7 @@ bool display_value()
 
             break;
 
-        case 3: // +20kV Bertan
+        case PS_20KV: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
@@ -477,7 +496,7 @@ bool display_value()
             
             break;
 
-        case 4: // +3kV Bertan
+        case PS_3KV: // +3kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -536,7 +555,7 @@ void setup()
 
     // Configure HVPSU specs
     switch (ps_id) {
-        case 1: // +1kV Matsusada
+        case PS_POS1KV: // +1kV Matsusada
 
             Serial.println("Configured for +1kV Matsusada");
 
@@ -545,7 +564,7 @@ void setup()
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
-        case 2: // -1kV Matsusada
+        case PS_NEG1KV: // -1kV Matsusada
 
             Serial.println("Configured for -1kV Matsusada");
 
@@ -554,7 +573,7 @@ void setup()
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
-        case 3: // +20kV Bertan
+        case PS_20KV: // +20kV Bertan
 
             Serial.println("Configured for +20kV Bertan");
 
@@ -562,7 +581,7 @@ void setup()
             ratedI_mA = 1.0;
             break;
 
-        case 4: // +3kV Bertan
+        case PS_3KV: // +3kV Bertan
 
             Serial.println("Configured for +3kV Bertan");
 
@@ -621,7 +640,7 @@ void loop()
   // A successful reply schedules a clear, but the clear itself is applied on the
   // next 150 ms read_value() boundary so sampling and second-tier latch rollover
   // stay aligned.
-  if (ps_id == 4 && pollResult > 4) {
+  if (ps_id == PS_3KV && pollResult > 4) {
     clearPending = true;
   }
 

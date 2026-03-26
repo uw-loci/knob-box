@@ -9,10 +9,10 @@ Firmware for an **Arduino Mega 2560** that
 
 The same `monitor_firmware.cpp` source is used for four monitor variants:
 
-- `ps_id = 1`: `+1 kV Matsusada`
-- `ps_id = 2`: `-1 kV Matsusada`
-- `ps_id = 3`: `+20 kV Bertan`
-- `ps_id = 4`: `+3 kV Bertan`
+- `SELECTED_PS_ID = PS_POS1KV`: `+1 kV Matsusada`
+- `SELECTED_PS_ID = PS_NEG1KV`: `-1 kV Matsusada`
+- `SELECTED_PS_ID = PS_20KV`: `+20 kV Bertan`
+- `SELECTED_PS_ID = PS_3KV`: `+3 kV Bertan`
 
 The `+3 kV` monitor has extra firmware responsibilities. In addition to monitoring its own supply, it also reads the Logic Arduino interface signals and forwards that state to the Dashboard through its Modbus register map.
 
@@ -26,7 +26,7 @@ The `+3 kV` monitor has extra firmware responsibilities. In addition to monitori
 |-------------|---------|-------|
 | `A0` | Current threshold pot input | Internal ADC |
 | `A1` | Voltage threshold pot input | Internal ADC |
-| `D6` | Matsusada reset LED | Used on `ps_id = 1, 2` only |
+| `D6` | Matsusada reset LED | Used on `PS_POS1KV` and `PS_NEG1KV` only |
 | `D7` | HV enable switch input | Common firmware input; for `+3 kV` this is the raw `3 kV Enable` switch request and is reported through the common HV-enable register |
 | `D17` | RS-485 direction control | `low = receive`, transceiver controlled by firmware |
 | `D18` | `TX1` | Modbus RTU transmit |
@@ -73,20 +73,32 @@ Target board: `Arduino Mega 2560 Rev 3`
 
 ### Power Supply Selection
 
-Set the `ps_id` constant before compiling:
+Set `SELECTED_PS_ID` before compiling. Do not enter raw numbers:
 
 ```cpp
 /**
  * POWER SUPPLY IDENTIFIER
- *      - 1: +1kV Matsusada
- *      - 2: -1kV Matsusada
- *      - 3: +20kV Bertan
- *      - 4: +3kV Bertan
+ * Edit SELECTED_PS_ID only. Do not enter raw numbers here.
+ *      - PS_POS1KV: +1kV Matsusada
+ *      - PS_NEG1KV: -1kV Matsusada
+ *      - PS_20KV: +20kV Bertan
+ *      - PS_3KV: +3kV Bertan
  */
-const int ps_id = 1;
+#define PS_POS1KV 1
+#define PS_NEG1KV 2
+#define PS_20KV 3
+#define PS_3KV 4
+#define SELECTED_PS_ID PS_POS1KV
+
+#if SELECTED_PS_ID != PS_POS1KV && SELECTED_PS_ID != PS_NEG1KV && \
+    SELECTED_PS_ID != PS_20KV && SELECTED_PS_ID != PS_3KV
+#error "Invalid SELECTED_PS_ID. Use PS_POS1KV, PS_NEG1KV, PS_20KV, or PS_3KV."
+#endif
+
+const uint8_t ps_id = SELECTED_PS_ID;
 ```
 
-The selected `ps_id` controls:
+The selected `SELECTED_PS_ID` controls:
 
 - Voltage and current full-scale ratings
 - LCD formatting
@@ -101,7 +113,7 @@ The selected `ps_id` controls:
 1. Starts the USB debug serial port at `9600`
 2. Initializes I2C, the ADS1115, and the LCD
 3. Configures common input pins
-4. Selects supply-specific ratings from `ps_id`
+4. Selects supply-specific ratings from `SELECTED_PS_ID`
 5. For the `+3 kV` firmware variant, enables all Logic Arduino interface inputs
 6. Starts the Modbus RTU slave on `Serial1` at `9600`
 7. Registers periodic timer callbacks
@@ -114,12 +126,12 @@ The firmware uses the AVR watchdog in two stages:
 
 ### Supply Ratings Used by the Code
 
-| `ps_id` | Supply | `ratedHV_V` | `ratedI_mA` |
-|---------|--------|-------------|-------------|
-| `1` | `+1 kV Matsusada` | `1000.0` | `30.0` |
-| `2` | `-1 kV Matsusada` | `1000.0` | `30.0` |
-| `3` | `+20 kV Bertan` | `20000.0` | `1.0` |
-| `4` | `+3 kV Bertan` | `3000.0` | `10.0` |
+| `SELECTED_PS_ID` | Supply | `ratedHV_V` | `ratedI_mA` |
+|------------------|--------|-------------|-------------|
+| `PS_POS1KV` | `+1 kV Matsusada` | `1000.0` | `30.0` |
+| `PS_NEG1KV` | `-1 kV Matsusada` | `1000.0` | `30.0` |
+| `PS_20KV` | `+20 kV Bertan` | `20000.0` | `1.0` |
+| `PS_3KV` | `+3 kV Bertan` | `3000.0` | `10.0` |
 
 ### Main Loop
 
