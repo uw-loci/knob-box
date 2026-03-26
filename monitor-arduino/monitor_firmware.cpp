@@ -60,9 +60,9 @@ The monitor exposes two packed DINPUT registers:
 /**
  * System Constants
  */
-#define RESET_ENTER_V       0.3                     // V
-#define RESET_ENTER_I       0.3                     // mA
-#define RESET_EXIT_V        1.0                     // V
+#define RESET_ENTER_V       2                     // V
+#define RESET_ENTER_I       0.5                     // mA
+#define RESET_EXIT_V        2.5                     // V
 #define RESET_EXIT_I        1.0                     // mA
 #define VOLTS_PER_COUNT     0.1875F / 1000.0F       // correct with GAIN_TWO_THIRDS
 
