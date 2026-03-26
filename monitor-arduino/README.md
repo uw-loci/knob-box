@@ -63,7 +63,7 @@ The current source includes:
 - `avr/wdt`
 - `LiquidCrystal_I2C`
 - `Adafruit_ADS1X15`
-- A Modbus RTU library that provides `ModbusRtu.h`
+- `ModbusRtu.h` — <https://github.com/smarmengol/Modbus-Master-Slave-for-Arduino>
 
 Target board: `Arduino Mega 2560 Rev 3`
 
