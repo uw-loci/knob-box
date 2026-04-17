@@ -281,13 +281,15 @@ The firmware marks a potential reset state when:
 
 - The HV enable switch is on
 - The programmed voltage is above `1.0 V`
-- Measured voltage is below `0.3 V`
-- Measured current is below `0.3 mA`
+- Measured voltage is below `2.0 V`
+- Measured current is below `0.5 mA`
 
 It clears that state when the supply appears to recover:
 
-- Measured voltage rises above `1.0 V`, or
+- Measured voltage rises above `2.5 V`, or
 - Measured current rises above `1.0 mA`
+
+These values should match the firmware reset-threshold constants in `monitor_firmware.cpp`.
 
 The state is reported both on the Matsusada reset LED (`D6`) and in unlatched-signals bit `1`.
 
