@@ -1,6 +1,6 @@
 /**
  * High-Voltage Power Supply Monitoring Firmware.
- * Please set the power supply identifier before using.
+ * Please set SELECTED_PS_ID before compiling.
  */
 
 #include <arduino-timer.h>
@@ -12,12 +12,32 @@
 
 /**
  * POWER SUPPLY IDENTIFIER
- *      - 1: +1kV Matsusada
- *      - 2: -1kV Matsusada
- *      - 3: +20kV Bertan
- *      - 4: +3kV Bertan
+ * Edit SELECTED_PS_ID only. Do not enter raw numbers here.
+ *      - PS_POS1KV: +1kV Matsusada
+ *      - PS_NEG1KV: -1kV Matsusada
+ *      - PS_20KV: +20kV Bertan
+ *      - PS_3KV: +3kV Bertan
  */
-const int ps_id = 1;
+#define PS_POS1KV 1
+#define PS_NEG1KV 2
+#define PS_20KV 3
+#define PS_3KV 4
+
+/////////////////////////////////////////////////
+//////    EDIT BELOW TO SET POWER SUPPLY   //////
+/////////////////////////////////////////////////
+
+#define SELECTED_PS_ID PS_POS1KV
+
+/////////////////////////////////////////////////
+
+#if SELECTED_PS_ID != PS_POS1KV && SELECTED_PS_ID != PS_NEG1KV && \
+    SELECTED_PS_ID != PS_20KV && SELECTED_PS_ID != PS_3KV
+#error "Invalid SELECTED_PS_ID. Use PS_POS1KV, PS_NEG1KV, PS_20KV, or PS_3KV."
+#endif
+
+// Do Not Edit, edit #define SELECTED_PS_ID above instead
+const uint8_t ps_id = SELECTED_PS_ID;
 
 // Capture reset cause and stop any inherited watchdog before normal startup runs.
 // This follows the standard avr-libc early-startup watchdog pattern.
@@ -35,45 +55,23 @@ void watchdog_early_init(void) {
 /*
 Input Registers (Function Code 04)
 */
-#define IREG_HEALTH_ADDR            0   // TODO track health/error mode
-#define IREG_V_SET_ADDR             1   // integer volts
-#define IREG_V_READ_ADDR            2   // integer volts
-#define IREG_I_READ_ADDR            3   // integer microamps
-#define IREG_3KV_RESET_COUNT_ADDR   4   // count of reset events for 3kV Bertan
+#define IREG_V_SET_ADDR             0   // integer volts
+#define IREG_V_READ_ADDR            1   // integer volts
+#define IREG_I_READ_ADDR            2   // integer microamps
+#define IREG_3KV_RESET_COUNT_ADDR   3   // count of reset events for 3kV Bertan
 
 /*
 "Discrete Inputs" (really also input registers)
-TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
+The monitor exposes two packed DINPUT registers:
+    4 = unlatched signals
+    5 = latched flags
 */
-#define DINPUT_HVENABLE_ADDR            5
-// Just for matsusadas
-#define DINPUT_RESET_STATE_1KV_ADDR     6
-// Just for 3kV Bertan
-
-// (raw switch states)
-#define DINPUT_ARM80KV_ADDR             7
-// (logic arduino outputs)
-#define DINPUT_ARMBEAMS_ADDR            8
-#define DINPUT_CCSPOWER_ADDR            9
-#define DINPUT_3KV_ENABLE_ADDR          10 
-// (flags)
-#define DINPUT_NOMOP_FLAG_ADDR          11
-#define DINPUT_ARMBEAMS_FLAG_ADDR       12
-#define DINPUT_CCSPOWER_FLAG_ADDR       13
-#define DINPUT_ARM80KV_FLAG_ADDR        14
-#define DINPUT_1K_VCOMP_FLAG_ADDR       15
-#define DINPUT_1K_ICOMP_FLAG_ADDR       16
-#define DINPUT_NEG_1K_VCOMP_FLAG_ADDR   17
-#define DINPUT_NEG_1K_ICOMP_FLAG_ADDR   18
-#define DINPUT_20K_VCOMP_FLAG_ADDR      19
-#define DINPUT_20K_ICOMP_FLAG_ADDR      20
-#define DINPUT_3K_VCOMP_FLAG_ADDR       21
-#define DINPUT_3K_ICOMP_FLAG_ADDR       22
-#define DINPUT_LOGIC_ALIVE_ADDR         23   // 1 when Logic Arduino responded to the previous ACK cycle
+#define DINPUT_UNLATCHED_SIGNALS_ADDR   4
+#define DINPUT_LATCHED_FLAGS_ADDR       5
 
 // note: when changing this map, update these register counts:
-#define IREG_COUNT              5
-#define DINPUT_COUNT            19
+#define IREG_COUNT              4
+#define DINPUT_COUNT            2
 #define TOTAL_REG_COUNT         (IREG_COUNT + DINPUT_COUNT)
 //============================================================
 //============================================================
@@ -81,9 +79,9 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 /**
  * System Constants
  */
-#define RESET_ENTER_V       0.3                     // V
-#define RESET_ENTER_I       0.3                     // mA
-#define RESET_EXIT_V        1.0                     // V
+#define RESET_ENTER_V       2                     // V
+#define RESET_ENTER_I       0.5                     // mA
+#define RESET_EXIT_V        2.5                     // V
 #define RESET_EXIT_I        1.0                     // mA
 #define VOLTS_PER_COUNT     0.1875F / 1000.0F       // correct with GAIN_TWO_THIRDS
 
@@ -101,12 +99,14 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define RS485_DIR_PIN                   17      // low = receive mode
 #define FLAGS_ACK_PIN                   14      // ack pin to Logic Arduino
 #define LOGIC_ACK_ECHO_PIN              9       // ACK-back from Logic Arduino (toggles when Logic observes ACK edge)
-// (logic arduino outputs)
+
+// (logic arduino outputs / live signals)
 #define OUTPUT_CCSPOWER_PIN             22
 #define OUTPUT_ARMBEAMS_PIN             23
 #define OUTPUT_3KV_ENABLE_PIN           24
-// (flags)
-#define FLAG_NOMOP_PIN                  25
+// (live signal)
+#define FLAG_NOMOP_PIN                  25      // Logic Arduino live Nom Op signal
+// (latched flags)
 #define FLAG_3KV_TIMER_PIN              26      // Logic Arduino latched 3kV timer-event flag
 #define FLAG_ARMBEAMS_PIN               27
 #define FLAG_CCSPOWER_PIN               28
@@ -120,6 +120,28 @@ TODO: bit pack into 16-bit words to not waste 15 bits per flag/boolean value
 #define FLAG_3K_VCOMP_PIN               36
 #define FLAG_3K_ICOMP_PIN               37
 
+const uint16_t UNLATCHED_SIGNAL_MASK_HVENABLE         = ((uint16_t)1 << 0);   // D7
+const uint16_t UNLATCHED_SIGNAL_MASK_RESET_STATE_1KV  = ((uint16_t)1 << 1);   // reset state
+const uint16_t UNLATCHED_SIGNAL_MASK_ARM80KV_ENABLE   = ((uint16_t)1 << 2);   // D8
+const uint16_t UNLATCHED_SIGNAL_MASK_CCSPOWER_ENABLE  = ((uint16_t)1 << 3);   // D22
+const uint16_t UNLATCHED_SIGNAL_MASK_ARMBEAMS_ENABLE  = ((uint16_t)1 << 4);   // D23
+const uint16_t UNLATCHED_SIGNAL_MASK_3KV_ENABLE       = ((uint16_t)1 << 5);   // D24
+const uint16_t UNLATCHED_SIGNAL_MASK_NOMOP            = ((uint16_t)1 << 6);   // D25
+const uint16_t UNLATCHED_SIGNAL_MASK_LOGIC_ALIVE      = ((uint16_t)1 << 7);   // logic alive edge observed
+
+const uint16_t LATCHED_FLAG_MASK_3KV_TIMER            = ((uint16_t)1 <<  4);  // D26
+const uint16_t LATCHED_FLAG_MASK_ARMBEAMS_SWITCH      = ((uint16_t)1 <<  5);  // D27
+const uint16_t LATCHED_FLAG_MASK_CCSPOWER_ALLOW       = ((uint16_t)1 <<  6);  // D28
+const uint16_t LATCHED_FLAG_MASK_ARM80KV_SWITCH       = ((uint16_t)1 <<  7);  // D29
+const uint16_t LATCHED_FLAG_MASK_1K_VCOMP             = ((uint16_t)1 <<  8);  // D30
+const uint16_t LATCHED_FLAG_MASK_1K_ICOMP             = ((uint16_t)1 <<  9);  // D31
+const uint16_t LATCHED_FLAG_MASK_NEG_1K_VCOMP         = ((uint16_t)1 << 10);  // D32
+const uint16_t LATCHED_FLAG_MASK_NEG_1K_ICOMP         = ((uint16_t)1 << 11);  // D33
+const uint16_t LATCHED_FLAG_MASK_20K_VCOMP            = ((uint16_t)1 << 12);  // D34
+const uint16_t LATCHED_FLAG_MASK_20K_ICOMP            = ((uint16_t)1 << 13);  // D35
+const uint16_t LATCHED_FLAG_MASK_3K_VCOMP             = ((uint16_t)1 << 14);  // D36
+const uint16_t LATCHED_FLAG_MASK_3K_ICOMP             = ((uint16_t)1 << 15);  // D37
+
 /**
  * Other declarations and initializations
  */
@@ -131,10 +153,10 @@ float               programmedHV_V;                 // ""
 float               iPot_V;                         // potentiometer values
 float               vPot_V;                         // ""  
 float               thresholdHV_V;                  // thresholds
-float               thresholdI_mA;                  // ""
-bool                resetState1kV = false;          // for Matsusada reset state logic            
+float               thresholdI_mA;                  // ""           
 bool                ack_state = false;              // false = HI-Z, true = LOW
 bool                prevLogicAckEcho = false;       // D9 state sampled on previous 150 ms cycle
+bool                resetState1kV = false;          // for Matsusadas, true if predicted to be currently in the reset state after an overcurrent event
 char                buffer[21];                     // store formatted string to print to LCD
 char                programmedHV_buf[10];           // store current/voltage values for printing
 char                measuredHV_buf[10];             // ""    
@@ -142,8 +164,9 @@ char                thresholdHV_buf[10];            // ""
 char                measuredI_buf[10];              // ""
 char                thresholdI_buf[10];             // ""
 bool                prevNomOpState = false;         // previous D25 state, used to clear the 3kV timer-event count on Nom Op entry
-bool                prev3kVTimerLatchState = false; // previous sampled D26 latch state, used to detect new timer events
 int                 resetState3kV = 0;              // count of latched 3kV timer events since the last Nom Op entry
+uint16_t            latchedFlags = 0;               // sticky Modbus copy of D26-D37 until the next successful reply
+bool                clearPending = false;           // defer sticky-flag clear until the next 150 ms sampling boundary
 Timer<4, millis>    timer;
 Adafruit_ADS1115    ads; 
 LiquidCrystal_I2C   lcd(0x27, 20, 4);
@@ -178,6 +201,70 @@ static inline int16_t clamp_i16_positive(float x)
     else return (int16_t)x;
 }
 
+static inline bool readHVEnableSwitchSignal()
+{
+    if (ps_id == PS_20KV) {
+        // for +20kV Bertan, signal is active-high
+        return digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH;
+    }
+
+    return digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
+}
+
+static inline uint16_t readFlagsWord()
+{
+    uint16_t flags = 0;
+
+    flags |= (digitalRead(FLAG_3KV_TIMER_PIN)    == HIGH) ? LATCHED_FLAG_MASK_3KV_TIMER       : 0;
+    flags |= (digitalRead(FLAG_ARMBEAMS_PIN)     == HIGH) ? LATCHED_FLAG_MASK_ARMBEAMS_SWITCH : 0;
+    flags |= (digitalRead(FLAG_CCSPOWER_PIN)     == HIGH) ? LATCHED_FLAG_MASK_CCSPOWER_ALLOW  : 0;
+    flags |= (digitalRead(FLAG_ARM80KV_PIN)      == HIGH) ? LATCHED_FLAG_MASK_ARM80KV_SWITCH  : 0;
+    flags |= (digitalRead(FLAG_1K_VCOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_1K_VCOMP        : 0;
+    flags |= (digitalRead(FLAG_1K_ICOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_1K_ICOMP        : 0;
+    flags |= (digitalRead(FLAG_NEG_1K_VCOMP_PIN) == HIGH) ? LATCHED_FLAG_MASK_NEG_1K_VCOMP    : 0;
+    flags |= (digitalRead(FLAG_NEG_1K_ICOMP_PIN) == HIGH) ? LATCHED_FLAG_MASK_NEG_1K_ICOMP    : 0;
+    flags |= (digitalRead(FLAG_20K_VCOMP_PIN)    == HIGH) ? LATCHED_FLAG_MASK_20K_VCOMP       : 0;
+    flags |= (digitalRead(FLAG_20K_ICOMP_PIN)    == HIGH) ? LATCHED_FLAG_MASK_20K_ICOMP       : 0;
+    flags |= (digitalRead(FLAG_3K_VCOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_3K_VCOMP        : 0;
+    flags |= (digitalRead(FLAG_3K_ICOMP_PIN)     == HIGH) ? LATCHED_FLAG_MASK_3K_ICOMP        : 0;
+
+    return flags;
+}
+
+static inline bool readLogicAliveSignal()
+{
+    bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
+    bool logicAlive = (logicAckEcho != prevLogicAckEcho);
+    prevLogicAckEcho = logicAckEcho;
+    return logicAlive;
+}
+
+// forward dec for Matsusada reset state helper, which is used in readUnlatchedSignalsWord()
+static inline bool checkMatsusadaResetState();
+
+static inline uint16_t readUnlatchedSignalsWord()
+{
+    uint16_t signals = 0;
+
+    signals |= readHVEnableSwitchSignal() ? UNLATCHED_SIGNAL_MASK_HVENABLE        : 0;
+
+    if (ps_id == PS_POS1KV || ps_id == PS_NEG1KV) {
+        // only for Matsusada, check the reset state
+        signals |= checkMatsusadaResetState() ? UNLATCHED_SIGNAL_MASK_RESET_STATE_1KV : 0;
+    }
+
+    if (ps_id == PS_3KV) {
+        signals |= (digitalRead(ARM_80KV_SWITCH_PIN)   == LOW)  ? UNLATCHED_SIGNAL_MASK_ARM80KV_ENABLE  : 0;
+        signals |= (digitalRead(OUTPUT_CCSPOWER_PIN)   == HIGH) ? UNLATCHED_SIGNAL_MASK_CCSPOWER_ENABLE : 0;
+        signals |= (digitalRead(OUTPUT_ARMBEAMS_PIN)   == HIGH) ? UNLATCHED_SIGNAL_MASK_ARMBEAMS_ENABLE : 0;
+        signals |= (digitalRead(OUTPUT_3KV_ENABLE_PIN) == HIGH) ? UNLATCHED_SIGNAL_MASK_3KV_ENABLE      : 0;
+        signals |= (digitalRead(FLAG_NOMOP_PIN)        == HIGH) ? UNLATCHED_SIGNAL_MASK_NOMOP           : 0;
+        signals |= readLogicAliveSignal()                       ? UNLATCHED_SIGNAL_MASK_LOGIC_ALIVE     : 0;
+    }
+
+    return signals;
+}
+
 /**
  * Helper to check for Matsusada reset state.
  * 
@@ -193,7 +280,11 @@ static inline int16_t clamp_i16_positive(float x)
  * Toggling HV Enable will NOT clear the reset state -- the user must short the reset pins by
  * hitting the physical matsusada momentary reset switch on the front of the knob box.
  */
-void checkMatsusadaResetState() {
+static inline bool checkMatsusadaResetState() {
+    if (ps_id != PS_POS1KV && ps_id != PS_NEG1KV) {
+        return false;
+    }
+
     bool hvEnabled = digitalRead(HV_ENABLE_SWITCH_PIN) == LOW;
     bool highSetV = programmedHV_V > 1.0;
 
@@ -202,35 +293,35 @@ void checkMatsusadaResetState() {
         measuredHV_V < RESET_ENTER_V && measuredI_mA < RESET_ENTER_I) {
         resetState1kV = true;
         digitalWrite(RESET_LED_PIN, HIGH);
-        modbus_regs[DINPUT_RESET_STATE_1KV_ADDR] = 1;
     }
 
     // on recover, we only wait for current OR voltage to be above treshold
     else if (resetState1kV && (hvEnabled && (measuredHV_V > RESET_EXIT_V || measuredI_mA > RESET_EXIT_I))) {
         resetState1kV = false;
         digitalWrite(RESET_LED_PIN, LOW);
-        modbus_regs[DINPUT_RESET_STATE_1KV_ADDR] = 0;
     }
+
+    return resetState1kV;
 }
 
 /**
  * Helper to maintain the +3kV timer/reset-event counter.
  *
- * The +3kV monitor counts new timer events on rising edges of that latched flag and clears 
- * the count whenever Nom Op rises, which indicates the system has re-entered normal operation.
+ * The Logic Arduino raises D26 when it enters the 3kV timer state and holds that event flag
+ * until the next ACK edge. The +3kV monitor therefore counts any sampled-high D26 event flag
+ * and clears the count whenever Nom Op rises
  */
 void update3KVResetCounter(bool nomop, bool timerEventLatched) {
     if (!prevNomOpState && nomop) {
         // Clear the accumulated timer-event count when Nom Op is re-entered.
         resetState3kV = 0;
-    } else if (!prev3kVTimerLatchState && timerEventLatched) {
-        // Count each timer event once, on the D26 latch rising edge only.
+    } else if (timerEventLatched) {
+        // Count each sampled D26 timer-event flag once per 150 ms monitor read/ACK cycle.
         resetState3kV++;
     }
 
     modbus_regs[IREG_3KV_RESET_COUNT_ADDR] = resetState3kV;
     prevNomOpState = nomop;
-    prev3kVTimerLatchState = timerEventLatched;
 }
 
 /**
@@ -274,64 +365,34 @@ bool read_value()
     thresholdHV_V = (vPot_V / 5.0) * ratedHV_V;
     thresholdI_mA = (iPot_V / 5.0) * ratedI_mA;
 
-    /*
-    Read HV Enable switch state and store in RS-485 discrete input.
-    */
-    if (ps_id == 3) {
-        // for +20kv Bertan, signal is active-high
-        modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == HIGH);
-    } else {
-        modbus_regs[DINPUT_HVENABLE_ADDR] = (digitalRead(HV_ENABLE_SWITCH_PIN) == LOW);
-    }
-    
-    /*
-    Check Matsusada reset state.
-    */
-    if (ps_id == 1 || ps_id == 2) { checkMatsusadaResetState(); }
-
     /**
      *  3kV Bertan specific: 
      * 
-     *      read the live Nom Op flag, latched logic event flags, logic arduino outputs, and switch states.
+     *      read the live unlatched signals, latched logic event flags, logic arduino outputs, and switch states.
      *
      *      update the 3kV timer/reset-event counter from the latched D26 timer flag.
      */
-    if (ps_id == 4) { // only for +3kV Bertan
+    if (ps_id == PS_3KV) { // only for +3kV Bertan
 
-        // read switch state of arm 80kV
-        modbus_regs[DINPUT_ARM80KV_ADDR] = (digitalRead(ARM_80KV_SWITCH_PIN) == LOW);
+        uint16_t flags = readFlagsWord();
 
-        // read logic arduino outputs
-        modbus_regs[DINPUT_ARMBEAMS_ADDR] = digitalRead(OUTPUT_ARMBEAMS_PIN);
-        modbus_regs[DINPUT_CCSPOWER_ADDR] = digitalRead(OUTPUT_CCSPOWER_PIN) ;
-        modbus_regs[DINPUT_3KV_ENABLE_ADDR] = digitalRead(OUTPUT_3KV_ENABLE_PIN);
+        if (clearPending) {
+            latchedFlags = 0;
+            clearPending = false;
+        }
 
-        // D25 is live; D26 is a latched timer-event flag.
-        bool nomop = digitalRead(FLAG_NOMOP_PIN);
-        bool timerEventLatched = digitalRead(FLAG_3KV_TIMER_PIN);
+        latchedFlags |= flags;
+        modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = latchedFlags;
 
-        // Update the 3kV timer/reset-event counter from D26.
+        uint16_t unlatchedSignals = readUnlatchedSignalsWord();
+        modbus_regs[DINPUT_UNLATCHED_SIGNALS_ADDR] = unlatchedSignals;
+
+        // D25 is live in the unlatched register; D26 is a latched timer-event flag.
+        bool nomop = (unlatchedSignals & UNLATCHED_SIGNAL_MASK_NOMOP) != 0;
+        bool timerEventLatched = (flags & LATCHED_FLAG_MASK_3KV_TIMER) != 0;
+
+        // Update the 3kV timer/reset-event counter from the sampled D26 event flag.
         update3KVResetCounter(nomop, timerEventLatched);
-
-        modbus_regs[DINPUT_NOMOP_FLAG_ADDR] = nomop;
-
-        // other flags --> likely just for logging purposes on dashboard
-        modbus_regs[DINPUT_ARMBEAMS_FLAG_ADDR] = digitalRead(FLAG_ARMBEAMS_PIN);
-        modbus_regs[DINPUT_CCSPOWER_FLAG_ADDR] = digitalRead(FLAG_CCSPOWER_PIN);
-        modbus_regs[DINPUT_ARM80KV_FLAG_ADDR] = digitalRead(FLAG_ARM80KV_PIN);
-        modbus_regs[DINPUT_1K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_1K_VCOMP_PIN);
-        modbus_regs[DINPUT_1K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_1K_ICOMP_PIN);
-        modbus_regs[DINPUT_NEG_1K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_NEG_1K_VCOMP_PIN);
-        modbus_regs[DINPUT_NEG_1K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_NEG_1K_ICOMP_PIN);
-        modbus_regs[DINPUT_20K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_20K_VCOMP_PIN);
-        modbus_regs[DINPUT_20K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_20K_ICOMP_PIN);
-        modbus_regs[DINPUT_3K_VCOMP_FLAG_ADDR] = digitalRead(FLAG_3K_VCOMP_PIN);
-        modbus_regs[DINPUT_3K_ICOMP_FLAG_ADDR] = digitalRead(FLAG_3K_ICOMP_PIN);
-
-        // Look for Ack Back Edge from logic Arduino
-        bool logicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN);
-        modbus_regs[DINPUT_LOGIC_ALIVE_ADDR] = (logicAckEcho != prevLogicAckEcho);
-        prevLogicAckEcho = logicAckEcho;
 
         // ack flag read so logic arduino can reset and continue
         if (ack_state == false) {
@@ -343,6 +404,9 @@ bool read_value()
             ack_state = false;
         }
 
+    } else {
+        modbus_regs[DINPUT_UNLATCHED_SIGNALS_ADDR] = readUnlatchedSignalsWord();
+        modbus_regs[DINPUT_LATCHED_FLAGS_ADDR] = 0;
     }
 
     return true;
@@ -357,7 +421,7 @@ bool display_value()
     dtostrf(thresholdI_mA, 3, 1, thresholdI_buf);
 
     switch(ps_id) {
-        case 1: // +1kV Matsusada
+        case PS_POS1KV: // +1kV Matsusada
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -382,7 +446,7 @@ bool display_value()
 
             break;
         
-        case 2: // -1kV Matsusada
+        case PS_NEG1KV: // -1kV Matsusada
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -407,7 +471,7 @@ bool display_value()
 
             break;
 
-        case 3: // +20kV Bertan
+        case PS_20KV: // +20kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf((programmedHV_V / 1000.0), 5, 2, programmedHV_buf);
@@ -432,7 +496,7 @@ bool display_value()
             
             break;
 
-        case 4: // +3kV Bertan
+        case PS_3KV: // +3kV Bertan
 
             // make voltage values printable -> convert from float to string
             dtostrf(programmedHV_V, 4, 0, programmedHV_buf);
@@ -466,6 +530,17 @@ bool clear_display() {
     return true;
 }
 
+static void failStartupAndTripWatchdog(const char *message)
+{
+    Serial.println(message);
+    Serial.flush();
+    wdt_enable(WDTO_1S);
+
+    while (true) {
+        // Intentionally stop here so the watchdog forces a reset.
+    }
+}
+
 void setup()
 {
 
@@ -475,8 +550,7 @@ void setup()
     // Initialize the ADS1115 and I2C bus
     Wire.begin();
     if (!ads.begin()) {
-        Serial.println("Failed to initialize ADS.");
-        // while (1);
+        failStartupAndTripWatchdog("Failed to initialize ADS.");
     }
     ads.setDataRate(RATE_ADS1115_860SPS);
     ads.setGain(GAIN_TWOTHIRDS); // deafult, but want to be sure
@@ -491,7 +565,7 @@ void setup()
 
     // Configure HVPSU specs
     switch (ps_id) {
-        case 1: // +1kV Matsusada
+        case PS_POS1KV: // +1kV Matsusada
 
             Serial.println("Configured for +1kV Matsusada");
 
@@ -500,7 +574,7 @@ void setup()
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
-        case 2: // -1kV Matsusada
+        case PS_NEG1KV: // -1kV Matsusada
 
             Serial.println("Configured for -1kV Matsusada");
 
@@ -509,7 +583,7 @@ void setup()
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
-        case 3: // +20kV Bertan
+        case PS_20KV: // +20kV Bertan
 
             Serial.println("Configured for +20kV Bertan");
 
@@ -517,7 +591,7 @@ void setup()
             ratedI_mA = 1.0;
             break;
 
-        case 4: // +3kV Bertan
+        case PS_3KV: // +3kV Bertan
 
             Serial.println("Configured for +3kV Bertan");
 
@@ -545,7 +619,6 @@ void setup()
             pinMode(LOGIC_ACK_ECHO_PIN, INPUT_PULLUP);
             prevLogicAckEcho = digitalRead(LOGIC_ACK_ECHO_PIN); // initialize D9 edge detection
             prevNomOpState = digitalRead(FLAG_NOMOP_PIN);
-            prev3kVTimerLatchState = digitalRead(FLAG_3KV_TIMER_PIN);
             // switches only monitored by +3kV
             pinMode(ARM_BEAMS_SWITCH_PIN, INPUT_PULLUP);
             pinMode(CCS_POWER_ALLOW_SWITCH_PIN, INPUT_PULLUP);
@@ -571,7 +644,15 @@ void loop()
 {
   wdt_reset(); //Feed dog
 
-  slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+  int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+
+  // The dashboard currently reads the full 0-5 block in one request.
+  // A successful reply schedules a clear, but the clear itself is applied on the
+  // next 150 ms read_value() boundary so sampling and second-tier latch rollover
+  // stay aligned.
+  if (ps_id == PS_3KV && pollResult > 4) {
+    clearPending = true;
+  }
 
   timer.tick();
 }

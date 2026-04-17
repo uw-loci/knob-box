@@ -9,10 +9,10 @@ Firmware for an **Arduino Mega 2560** that
 
 The same `monitor_firmware.cpp` source is used for four monitor variants:
 
-- `ps_id = 1`: `+1 kV Matsusada`
-- `ps_id = 2`: `-1 kV Matsusada`
-- `ps_id = 3`: `+20 kV Bertan`
-- `ps_id = 4`: `+3 kV Bertan`
+- `SELECTED_PS_ID = PS_POS1KV`: `+1 kV Matsusada`
+- `SELECTED_PS_ID = PS_NEG1KV`: `-1 kV Matsusada`
+- `SELECTED_PS_ID = PS_20KV`: `+20 kV Bertan`
+- `SELECTED_PS_ID = PS_3KV`: `+3 kV Bertan`
 
 The `+3 kV` monitor has extra firmware responsibilities. In addition to monitoring its own supply, it also reads the Logic Arduino interface signals and forwards that state to the Dashboard through its Modbus register map.
 
@@ -26,7 +26,7 @@ The `+3 kV` monitor has extra firmware responsibilities. In addition to monitori
 |-------------|---------|-------|
 | `A0` | Current threshold pot input | Internal ADC |
 | `A1` | Voltage threshold pot input | Internal ADC |
-| `D6` | Matsusada reset LED | Used on `ps_id = 1, 2` only |
+| `D6` | Matsusada reset LED | Used on `PS_POS1KV` and `PS_NEG1KV` only |
 | `D7` | HV enable switch input | Common firmware input; for `+3 kV` this is the raw `3 kV Enable` switch request and is reported through the common HV-enable register |
 | `D17` | RS-485 direction control | `low = receive`, transceiver controlled by firmware |
 | `D18` | `TX1` | Modbus RTU transmit |
@@ -63,7 +63,7 @@ The current source includes:
 - `avr/wdt`
 - `LiquidCrystal_I2C`
 - `Adafruit_ADS1X15`
-- A Modbus RTU library that provides `ModbusRtu.h`
+- `ModbusRtu.h` — <https://github.com/smarmengol/Modbus-Master-Slave-for-Arduino>
 
 Target board: `Arduino Mega 2560 Rev 3`
 
@@ -73,20 +73,32 @@ Target board: `Arduino Mega 2560 Rev 3`
 
 ### Power Supply Selection
 
-Set the `ps_id` constant before compiling:
+Set `SELECTED_PS_ID` before compiling. Do not enter raw numbers:
 
 ```cpp
 /**
  * POWER SUPPLY IDENTIFIER
- *      - 1: +1kV Matsusada
- *      - 2: -1kV Matsusada
- *      - 3: +20kV Bertan
- *      - 4: +3kV Bertan
+ * Edit SELECTED_PS_ID only. Do not enter raw numbers here.
+ *      - PS_POS1KV: +1kV Matsusada
+ *      - PS_NEG1KV: -1kV Matsusada
+ *      - PS_20KV: +20kV Bertan
+ *      - PS_3KV: +3kV Bertan
  */
-const int ps_id = 1;
+#define PS_POS1KV 1
+#define PS_NEG1KV 2
+#define PS_20KV 3
+#define PS_3KV 4
+#define SELECTED_PS_ID PS_POS1KV
+
+#if SELECTED_PS_ID != PS_POS1KV && SELECTED_PS_ID != PS_NEG1KV && \
+    SELECTED_PS_ID != PS_20KV && SELECTED_PS_ID != PS_3KV
+#error "Invalid SELECTED_PS_ID. Use PS_POS1KV, PS_NEG1KV, PS_20KV, or PS_3KV."
+#endif
+
+const uint8_t ps_id = SELECTED_PS_ID;
 ```
 
-The selected `ps_id` controls:
+The selected `SELECTED_PS_ID` controls:
 
 - Voltage and current full-scale ratings
 - LCD formatting
@@ -101,7 +113,7 @@ The selected `ps_id` controls:
 1. Starts the USB debug serial port at `9600`
 2. Initializes I2C, the ADS1115, and the LCD
 3. Configures common input pins
-4. Selects supply-specific ratings from `ps_id`
+4. Selects supply-specific ratings from `SELECTED_PS_ID`
 5. For the `+3 kV` firmware variant, enables all Logic Arduino interface inputs
 6. Starts the Modbus RTU slave on `Serial1` at `9600`
 7. Registers periodic timer callbacks
@@ -114,12 +126,12 @@ The firmware uses the AVR watchdog in two stages:
 
 ### Supply Ratings Used by the Code
 
-| `ps_id` | Supply | `ratedHV_V` | `ratedI_mA` |
-|---------|--------|-------------|-------------|
-| `1` | `+1 kV Matsusada` | `1000.0` | `30.0` |
-| `2` | `-1 kV Matsusada` | `1000.0` | `30.0` |
-| `3` | `+20 kV Bertan` | `20000.0` | `1.0` |
-| `4` | `+3 kV Bertan` | `3000.0` | `10.0` |
+| `SELECTED_PS_ID` | Supply | `ratedHV_V` | `ratedI_mA` |
+|------------------|--------|-------------|-------------|
+| `PS_POS1KV` | `+1 kV Matsusada` | `1000.0` | `30.0` |
+| `PS_NEG1KV` | `-1 kV Matsusada` | `1000.0` | `30.0` |
+| `PS_20KV` | `+20 kV Bertan` | `20000.0` | `1.0` |
+| `PS_3KV` | `+3 kV Bertan` | `3000.0` | `10.0` |
 
 ### Main Loop
 
@@ -130,13 +142,18 @@ void loop()
 {
   wdt_reset(); // Feed dog
 
-  slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+  int8_t pollResult = slave.poll(modbus_regs, TOTAL_REG_COUNT); // poll for requests from dashboard
+
+  if (ps_id == PS_3KV && pollResult > 4) {
+    clearPending = true;
+  }
 
   timer.tick();
 }
 ```
 
 Key point: the current firmware does not have a separate `transmit_data()` task. Dashboard communication happens when the Modbus slave is polled.
+For the `+3 kV` variant, a successful Modbus reply also clears the monitor-side sticky copy of the Logic Arduino fault flags after that response has been sent.
 
 ---
 
@@ -192,72 +209,91 @@ The code clamps negative or over-range ADS1115 raw values before scaling and cla
 
 The current firmware exposes one contiguous register array:
 
-- `IREG_COUNT = 5`
-- `DINPUT_COUNT = 19`
-- `TOTAL_REG_COUNT = 24`
+- `IREG_COUNT = 4`
+- `DINPUT_COUNT = 2`
+- `TOTAL_REG_COUNT = 6`
 
 ### Common Input Registers
 
 | Address | Name | Meaning |
 |---------|------|---------|
-| `0` | `IREG_HEALTH_ADDR` | Reserved, currently unused / TODO |
-| `1` | `IREG_V_SET_ADDR` | Programmed HV, rounded to integer volts |
-| `2` | `IREG_V_READ_ADDR` | Measured HV, rounded to integer volts |
-| `3` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
-| `4` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` timer/reset-event counter |
+| `0` | `IREG_V_SET_ADDR` | Programmed HV, rounded to integer volts |
+| `1` | `IREG_V_READ_ADDR` | Measured HV, rounded to integer volts |
+| `2` | `IREG_I_READ_ADDR` | Measured current, rounded to integer microamps |
+| `3` | `IREG_3KV_RESET_COUNT_ADDR` | `+3 kV` timer/reset-event counter |
 
-### Common Boolean / State Registers
-
-| Address | Name | Meaning |
-|---------|------|---------|
-| `5` | `DINPUT_HVENABLE_ADDR` | HV enable switch state |
-| `6` | `DINPUT_RESET_STATE_1KV_ADDR` | Matsusada reset-state indication |
-
-### `+3 kV`-Specific Registers
+### Packed DINPUT Registers
 
 | Address | Name | Meaning |
 |---------|------|---------|
-| `7` | `DINPUT_ARM80KV_ADDR` | Raw Arm 80 kV switch state |
-| `8` | `DINPUT_ARMBEAMS_ADDR` | Logic Arduino Arm Beams output state |
-| `9` | `DINPUT_CCSPOWER_ADDR` | Logic Arduino CCS Power output state |
-| `10` | `DINPUT_3KV_ENABLE_ADDR` | Logic Arduino 3 kV enable output state |
-| `11` | `DINPUT_NOMOP_FLAG_ADDR` | Logic Arduino Nom Op flag |
-| `12` | `DINPUT_ARMBEAMS_FLAG_ADDR` | Arm Beams-related flag |
-| `13` | `DINPUT_CCSPOWER_FLAG_ADDR` | CCS Power-related flag |
-| `14` | `DINPUT_ARM80KV_FLAG_ADDR` | Arm 80 kV-related flag |
-| `15` | `DINPUT_1K_VCOMP_FLAG_ADDR` | `+1 kV` undervoltage flag |
-| `16` | `DINPUT_1K_ICOMP_FLAG_ADDR` | `+1 kV` overcurrent flag |
-| `17` | `DINPUT_NEG_1K_VCOMP_FLAG_ADDR` | `-1 kV` undervoltage flag |
-| `18` | `DINPUT_NEG_1K_ICOMP_FLAG_ADDR` | `-1 kV` overcurrent flag |
-| `19` | `DINPUT_20K_VCOMP_FLAG_ADDR` | `+20 kV` undervoltage flag |
-| `20` | `DINPUT_20K_ICOMP_FLAG_ADDR` | `+20 kV` overcurrent flag |
-| `21` | `DINPUT_3K_VCOMP_FLAG_ADDR` | `+3 kV` undervoltage flag |
-| `22` | `DINPUT_3K_ICOMP_FLAG_ADDR` | `+3 kV` overcurrent flag |
-| `23` | `DINPUT_LOGIC_ALIVE_ADDR` | Logic Arduino ack-back edge observed |
+| `4` | `DINPUT_UNLATCHED_SIGNALS_ADDR` | Packed unlatched signals word |
+| `5` | `DINPUT_LATCHED_FLAGS_ADDR` | Packed monitor-latched flags word |
+
+`DINPUT_UNLATCHED_SIGNALS_ADDR` bit layout:
+
+| Bit | Name | Source | Meaning |
+|-----|------|--------|---------|
+| `0` | `HV Enable` | `D7` | HV enable switch state |
+| `1` | `Reset State 1kV` | internal state | Matsusada reset-state indication (`ps_id = PS_POS1KV` or `PS_NEG1KV`) |
+| `2` | `Arm 80kV Enable` | `D8` | Arm 80 kV enable switch (`ps_id = PS_3KV`) |
+| `3` | `CCS Power Enable` | `D22` | CCS Power Enable output signal (`ps_id = PS_3KV`) |
+| `4` | `Arm Beams Enable` | `D23` | Arm Beams Enable output signal (`ps_id = PS_3KV`) |
+| `5` | `3kV HV Enable` | `D24` | `3 kV` HV Enable output signal (`ps_id = PS_3KV`) |
+| `6` | `Nom Op` | `D25` | Nom Op signal (`ps_id = PS_3KV`) |
+| `7` | `Logic Alive` | derived from `D9` edge detect | Logic Arduino alive signal (`ps_id = PS_3KV`) |
+
+`DINPUT_LATCHED_FLAGS_ADDR` bit layout:
+
+| Bit | Pin | Meaning |
+|-----|-----|---------|
+| `4` | `D26` | 3 kV Timer State |
+| `5` | `D27` | Arm Beams Switch |
+| `6` | `D28` | CCS Power Allow Switch |
+| `7` | `D29` | Arm 80 kV Switch |
+| `8` | `D30` | `+1 kV` V Comparator |
+| `9` | `D31` | `+1 kV` I Comparator |
+| `10` | `D32` | `-1 kV` V Comparator |
+| `11` | `D33` | `-1 kV` I Comparator |
+| `12` | `D34` | `20 kV` V Comparator |
+| `13` | `D35` | `20 kV` I Comparator |
+| `14` | `D36` | `3 kV` V Comparator |
+| `15` | `D37` | `3 kV` I Comparator |
+
+Bits `0-3` are currently unused and remain `0`.
+
+For `ps_id = PS_3KV`, the monitor samples the raw Logic Arduino latch pins on each `read_value()` cycle, ORs those bits into its own sticky `latchedFlags` word, and publishes that word in register `5`. After the dashboard request is answered successfully, the monitor clears that sticky word so the next request reports only newly sampled events.
+
+Per-supply use of the packed DINPUT registers:
+
+- `ps_id = PS_POS1KV` or `PS_NEG1KV`: unlatched bits `0-1` are used; latched word remains `0`
+- `ps_id = PS_20KV`: unlatched bit `0` is used; latched word remains `0`
+- `ps_id = PS_3KV`: unlatched bits `0`, `2-7` are used; latched bits `4-15` are used
 
 ---
 
 ## Supply-Specific Firmware Behavior
 
-### Matsusada Variants (`ps_id = 1, 2`)
+### Matsusada Variants (`ps_id = PS_POS1KV` or `PS_NEG1KV`)
 
-The Matsusada variants run `checkMatsusadaResetState()`.
+The Matsusada variants drive unlatched-signals bit `1` through `checkMatsusadaResetState()`.
 
 The firmware marks a potential reset state when:
 
 - The HV enable switch is on
 - The programmed voltage is above `1.0 V`
-- Measured voltage is below `0.3 V`
-- Measured current is below `0.3 mA`
+- Measured voltage is below `2.0 V`
+- Measured current is below `0.5 mA`
 
 It clears that state when the supply appears to recover:
 
-- Measured voltage rises above `1.0 V`, or
+- Measured voltage rises above `2.5 V`, or
 - Measured current rises above `1.0 mA`
 
-The state is reported both on the Matsusada reset LED (`D6`) and in Modbus register `6`.
+These values should match the firmware reset-threshold constants in `monitor_firmware.cpp`.
 
-### `+20 kV` Bertan (`ps_id = 3`)
+The state is reported both on the Matsusada reset LED (`D6`) and in unlatched-signals bit `1`.
+
+### `+20 kV` Bertan (`ps_id = PS_20KV`)
 
 The `+20 kV` variant uses `kV` formatting on the LCD:
 
@@ -265,31 +301,31 @@ The `+20 kV` variant uses `kV` formatting on the LCD:
 - Measured voltage shown with `0.01 kV` formatting
 - Threshold voltage shown with `0.1 kV` formatting
 
-For `DINPUT_HVENABLE_ADDR`, the current code treats the `+20 kV` HV enable telemetry as active-high.
+For `DINPUT_UNLATCHED_SIGNALS_ADDR` bit `0`, the current code treats the `+20 kV` HV enable telemetry as active-high.
 
-### `+3 kV` Bertan (`ps_id = 4`)
+### `+3 kV` Bertan (`ps_id = PS_3KV`)
 
 The `+3 kV` variant extends the normal monitor behavior with Logic Arduino telemetry:
 
-- Reads Logic Arduino output-state lines on `D22-D24`
-- Reads the live `Nom Op` flag on `D25`
-- Reads latched logic-history flags on `D26-D37`
-- Reads raw Arm 80 kV switch state on `D8`
-- Reads the raw `3 kV Enable` switch request on `D7`
-- Reads Logic Arduino ack-back on `D9`
+- Uses `DINPUT_UNLATCHED_SIGNALS_ADDR` for the shared HV-enable input on `D7`, the raw Arm 80 kV switch on `D8`, the live Logic Arduino output signals on `D22-D25`, and the logic-alive heartbeat edge detect derived from `D9`
+- Uses `DINPUT_LATCHED_FLAGS_ADDR` for a monitor-latched copy of the Logic Arduino flags on `D26-D37`, keeping `D26 -> bit 4` through `D37 -> bit 15`
+- Keeps `D25` (`Nom Op`) in the unlatched word and `D26-D37` in the latched word
+- Maps the existing ack-back edge-detect behavior on `D9` to unlatched-signals bit `7`
 - Toggles the flags acknowledge line on `D14`
+- Clears the monitor-latched flags only after a successful Modbus reply to the dashboard
 
 The current code configures raw `Arm Beams` and `CCS Power Allow` switch inputs on `D11` and `D12`, but the published Modbus map currently exposes the Logic Arduino output-state lines on `D22` and `D23` for those functions.
 
-The dedicated `3kV_HVEnable_Flag` Modbus register has been removed. The raw `3 kV Enable` switch request on `D7` is now reported only through the common HV-enable register at address `5`.
+The dedicated `3kV_HVEnable_Flag` Modbus register has been removed. The raw `3 kV Enable` switch request on `D7` is now reported only through unlatched-signals bit `0`.
 
-It also tracks a `3 kV` timer/reset-event counter in Modbus register `4`.
+It also tracks a `3 kV` timer/reset-event counter in Modbus register `3`.
 
 Current implementation detail: the counter increments when:
 
 - The latched `D26` timer-event flag rises
 
 It resets to `0` when `Nom Op` rises.
+The counter continues to use the raw sampled `D26` latch input rather than the monitor-latched Modbus register.
 
 ---
 

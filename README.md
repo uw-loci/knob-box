@@ -35,10 +35,10 @@ That split is central to understanding the software:
 
 Used on four Arduino Mega boards, one per power supply:
 
-- `ps_id = 1`: `+1 kV Matsusada`
-- `ps_id = 2`: `-1 kV Matsusada`
-- `ps_id = 3`: `+20 kV Bertan`
-- `ps_id = 4`: `+3 kV Bertan`
+- `SELECTED_PS_ID = PS_POS1KV`: `+1 kV Matsusada`
+- `SELECTED_PS_ID = PS_NEG1KV`: `-1 kV Matsusada`
+- `SELECTED_PS_ID = PS_20KV`: `+20 kV Bertan`
+- `SELECTED_PS_ID = PS_3KV`: `+3 kV Bertan`
 
 Core jobs:
 
@@ -145,7 +145,7 @@ Important consequence:
 - The Logic Arduino does not talk directly to the Dashboard
 - The Dashboard only sees Logic Arduino state because the `+3 kV` monitor Arduino reads it and republishes it
 
-In the current code, the Modbus slave address is the `ps_id`, so the four boards are intended to appear as four addressed devices on the shared RS-485 bus.
+In the current code, the Modbus slave address comes from the selected power-supply ID (`SELECTED_PS_ID`, exposed internally as `ps_id`), so the four boards are intended to appear as four addressed devices on the shared RS-485 bus.
 
 ## 6. Logic Firmware Role
 
@@ -232,7 +232,7 @@ The Logic Arduino exports two kinds of information to the `+3 kV` monitor:
 - `D27-D29`: latched switch-related flags
 - `D30-D37`: latched comparator fault flags
 
-In the current implementation, the latched flags on `D26-D37` persist until the `+3 kV` monitor acknowledges that it has read them. `D25` remains live.
+In the current implementation, the Logic Arduino latches on `D26-D37` persist until the next `+3 kV` monitor ACK edge. The monitor samples those pins every `150 ms`, accumulates them into its own sticky Modbus latched-flags register, and clears that Modbus-visible copy only after a successful dashboard poll reply. `D25` remains live.
 
 The current `+3 kV` monitor firmware uses the latched `D26` timer-event flag internally to maintain its `3 kV` timer/reset-event counter.
 
@@ -242,7 +242,7 @@ The two boards use a simple handshake so the monitor can both clear latched flag
 
 #### `D14`: ACK from monitor to logic
 
-The `+3 kV` monitor toggles the acknowledge line after it reads the Logic Arduino status.
+The `+3 kV` monitor toggles the acknowledge line on its periodic sampling cycle after it reads the Logic Arduino status.
 
 Current implementation detail:
 
