@@ -660,7 +660,7 @@ void setup()
     }
 
     displayStartupInfo();
-    delay(1000);
+    delay(3000);
 
     Serial.println("Initializing Modbus RTU Server on Serial1...");
     Serial1.begin(9600);
