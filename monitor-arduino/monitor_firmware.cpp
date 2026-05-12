@@ -38,7 +38,7 @@
 
 // Do Not Edit, edit #define SELECTED_PS_ID above instead
 const uint8_t ps_id = SELECTED_PS_ID;
-const char firmwareVersion[] = "1.0";
+const char firmwareVersion[] = "2.0";
 
 // Capture reset cause and stop any inherited watchdog before normal startup runs.
 // This follows the standard avr-libc early-startup watchdog pattern.
