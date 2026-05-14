@@ -38,6 +38,7 @@
 
 // Do Not Edit, edit #define SELECTED_PS_ID above instead
 const uint8_t ps_id = SELECTED_PS_ID;
+const char firmwareVersion[] = "2.0";
 
 // Capture reset cause and stop any inherited watchdog before normal startup runs.
 // This follows the standard avr-libc early-startup watchdog pattern.
@@ -147,6 +148,8 @@ const uint16_t LATCHED_FLAG_MASK_3K_ICOMP             = ((uint16_t)1 << 15);  //
  */
 float               ratedHV_V;                      // "rated voltage" -- just the max output of the HVPSU
 float               ratedI_mA;                      // same for "rated current"
+const char          *powerSupplyName = "";
+const char          *ratedOutputText = "";
 float               measuredI_mA;                   // calculated values
 float               measuredHV_V;                   // ""
 float               programmedHV_V;                 // ""
@@ -530,6 +533,27 @@ bool clear_display() {
     return true;
 }
 
+static void lcdPrintPaddedLine(uint8_t row, const char *text)
+{
+    char line[21];
+    snprintf(line, sizeof(line), "%-20s", text);
+    lcd.setCursor(0, row);
+    lcd.print(line);
+}
+
+static void displayStartupInfo()
+{
+    char line[21];
+
+    lcd.clear();
+    lcdPrintPaddedLine(0, powerSupplyName);
+    snprintf(line, sizeof(line), "Firmware v%s", firmwareVersion);
+    lcdPrintPaddedLine(1, line);
+    snprintf(line, sizeof(line), "%s %s", __DATE__, __TIME__);
+    lcdPrintPaddedLine(2, line);
+    lcdPrintPaddedLine(3, ratedOutputText);
+}
+
 static void failStartupAndTripWatchdog(const char *message)
 {
     Serial.println(message);
@@ -571,6 +595,8 @@ void setup()
 
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
+            powerSupplyName = "+1kV Matsusada";
+            ratedOutputText = "Rated +1kV 30mA";
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
@@ -580,6 +606,8 @@ void setup()
 
             ratedHV_V = 1000.0;
             ratedI_mA = 30.0;
+            powerSupplyName = "-1kV Matsusada";
+            ratedOutputText = "Rated -1kV 30mA";
             pinMode(RESET_LED_PIN, OUTPUT);
             break;
 
@@ -589,6 +617,8 @@ void setup()
 
             ratedHV_V = 20000.0;
             ratedI_mA = 1.0;
+            powerSupplyName = "+20kV Bertan";
+            ratedOutputText = "Rated +20kV 1mA";
             break;
 
         case PS_3KV: // +3kV Bertan
@@ -597,6 +627,8 @@ void setup()
 
             ratedHV_V = 3000.0;
             ratedI_mA = 10.0;
+            powerSupplyName = "+3kV Bertan";
+            ratedOutputText = "Rated +3kV 10mA";
 
             // pins for logic arduino outputs / flags / ack
             pinMode(OUTPUT_CCSPOWER_PIN, INPUT);
@@ -626,6 +658,9 @@ void setup()
 
             break;
     }
+
+    displayStartupInfo();
+    delay(3000);
 
     Serial.println("Initializing Modbus RTU Server on Serial1...");
     Serial1.begin(9600);
