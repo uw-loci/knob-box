@@ -65,7 +65,7 @@ enum class Timer3kVStateMode : uint8_t {
 };
 
 // Set to DISABLE to remove all transitions into STATE_3KV_TIMER.
-static constexpr Timer3kVStateMode TIMER_3KV_STATE_MODE = Timer3kVStateMode::ENABLE;
+static constexpr Timer3kVStateMode TIMER_3KV_STATE_MODE = Timer3kVStateMode::DISABLE;
 
 // ========================= Port mapping =========================
 // Switches D10-13 => PB4-PB7
