@@ -660,7 +660,7 @@ void setup()
     }
 
     displayStartupInfo();
-    delay(5000);                // Display LCD info for 5 seconds
+    delay(5000);                // Display firmware version info for 5 seconds
 
     Serial.println("Initializing Modbus RTU Server on Serial1...");
     Serial1.begin(9600);
