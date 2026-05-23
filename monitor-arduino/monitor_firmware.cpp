@@ -38,7 +38,7 @@
 
 // Do Not Edit, edit #define SELECTED_PS_ID above instead
 const uint8_t ps_id = SELECTED_PS_ID;
-const char firmwareVersion[] = "2.0";
+const char firmwareVersion[] = "2.2";
 
 // Capture reset cause and stop any inherited watchdog before normal startup runs.
 // This follows the standard avr-libc early-startup watchdog pattern.
@@ -660,7 +660,7 @@ void setup()
     }
 
     displayStartupInfo();
-    delay(3000);
+    delay(5000);                // Display firmware version info for 5 seconds
 
     Serial.println("Initializing Modbus RTU Server on Serial1...");
     Serial1.begin(9600);
