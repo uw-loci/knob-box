@@ -1,6 +1,18 @@
 /*
   Knob Box - Logic Arduino (Mega 2560 Rev 3)
 
+ =============================== WARNING ==================================
+| <<<<<<<<<<<<<<<<<<  READ THIS BEFORE UPLOADING CODE >>>>>>>>>>>>>>>>>>>> |
+| This version of the Logic Arduino firmware has an override that bypasses |
+| all  interlocks  and  allows  CCS power  and  Arm Beams  to  be  enabled |
+| regardless  of any  interlock  conditions.  This is for testing purposes |
+| only,  and should ABSOLUTELY NOT be used outside of a controlled testing |
+| environment.  As soon as testing is complete,  the latest version of the |
+| firmware should be uploaded to the Logic Arduino and tested with several |
+| people present to ensure that the Logic Arduino is ready for Melt Metal. |
+| <<<<<<<<<<<<<<<<<<  READ THIS BEFORE UPLOADING CODE >>>>>>>>>>>>>>>>>>>> |
+ =============================== WARNING ==================================
+
   ========================= SAFETY / TRUTH TABLE =========================
 
   Comparator lines (D42-D49 on PORTL) are open-drain:
@@ -64,8 +76,11 @@ enum class Timer3kVStateMode : uint8_t {
   ENABLE  = 1
 };
 
+// WARNING: This is set to DISABLE for testing purposes. This state does NOT refelct the
+// intended behavior of the logic arduino, and should be set to ENABLE for Melt Metal
+
 // Set to DISABLE to remove all transitions into STATE_3KV_TIMER, or ENABLE to keep transitions.
-static constexpr Timer3kVStateMode TIMER_3KV_STATE_MODE = Timer3kVStateMode::ENABLE;
+static constexpr Timer3kVStateMode TIMER_3KV_STATE_MODE = Timer3kVStateMode::DISABLE;
 
 // ========================= Port mapping =========================
 // Switches D10-13 => PB4-PB7
@@ -393,8 +408,8 @@ static inline void step() {
   // ---- Assign Outputs ----
   switch (currentState) {
     case State::STATE_INTERLOCK:
-      outputSnapshot.ccsPowerEnable  = false;
-      outputSnapshot.armBeamsEnable  = false;
+      outputSnapshot.ccsPowerEnable  = sw_ccs_allow;
+      outputSnapshot.armBeamsEnable  = sw_arm_beams;
       outputSnapshot.enable3kV       = sw_3kv_enable;
       outputSnapshot.nomOp           = false;
       break;
